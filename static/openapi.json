@@ -1,0 +1,519 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Dashboard API",
+    "version": "1.0.0",
+    "description": "REST API สำหรับ WB Dashboard — ข้อมูล Machine downtime, Utilization, Technician performance\n\n**Auth:** ส่ง `x-api-key` header ทุก request (ยกเว้น `/health`). ถ้า `API_KEY` ว่างใน `.env` = ปิด auth"
+  },
+  "servers": [
+    { "url": "http://127.0.0.1:8080", "description": "Local dev" }
+  ],
+  "security": [{ "ApiKey": [] }],
+  "components": {
+    "securitySchemes": {
+      "ApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      }
+    },
+    "schemas": {
+      "ErrorDetail": {
+        "type": "object",
+        "properties": {
+          "code":    { "type": "string", "example": "NOT_FOUND" },
+          "message": { "type": "string", "example": "The requested resource was not found" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "data":  { "nullable": true, "example": null },
+          "error": { "$ref": "#/components/schemas/ErrorDetail" }
+        }
+      }
+    },
+    "parameters": {
+      "start": {
+        "name": "start", "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-01" },
+        "description": "วันเริ่มต้น (YYYY-MM-DD)"
+      },
+      "end": {
+        "name": "end", "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-31" },
+        "description": "วันสิ้นสุด (YYYY-MM-DD)"
+      },
+      "areas": {
+        "name": "areas", "in": "query", "schema": { "type": "string", "example": "WB,DA" },
+        "description": "Area codes คั่นด้วย comma"
+      },
+      "shift": {
+        "name": "shift", "in": "query", "schema": { "type": "string", "enum": ["Day", "Night"] },
+        "description": "กะ — Day (07:00-19:00) หรือ Night (19:00-07:00)"
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "API key ไม่ถูกต้อง",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      },
+      "BadRequest": {
+        "description": "Parameter ผิดหรือขาด",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      },
+      "InternalError": {
+        "description": "Database หรือ server error",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      }
+    }
+  },
+  "tags": [
+    { "name": "Health",       "description": "Server status" },
+    { "name": "Master",       "description": "ข้อมูล Area และเครื่องจักร" },
+    { "name": "Overview",     "description": "KPI ภาพรวม real-time" },
+    { "name": "Utilization",  "description": "วิเคราะห์การใช้งานเครื่อง" },
+    { "name": "Downtime",     "description": "วิเคราะห์ downtime และสาเหตุ" },
+    { "name": "Inventory",    "description": "ทะเบียนเครื่องจักร" },
+    { "name": "Tech",         "description": "ประสิทธิภาพช่างซ่อม" },
+    { "name": "WB",           "description": "รายงาน Wire Bonding รายกะ" },
+    { "name": "DA",           "description": "รายงาน Die Attach รายกะ" },
+    { "name": "Items",        "description": "Items CRUD (SQLite — demo)" }
+  ],
+  "paths": {
+
+    "/api/v1/health": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "Health check",
+        "description": "ตรวจสอบ server + MSSQL connection — **ไม่ต้อง API key**",
+        "security": [],
+        "operationId": "healthCheck",
+        "responses": {
+          "200": {
+            "description": "Server ปกติ",
+            "content": { "application/json": { "example": { "status": "ok", "database": "healthy", "version": "1.0.0" } } }
+          },
+          "503": {
+            "description": "Database ต่อไม่ได้",
+            "content": { "application/json": { "example": { "status": "degraded", "database": "unhealthy", "version": "1.0.0" } } }
+          }
+        }
+      }
+    },
+
+    "/api/v1/areas": {
+      "get": {
+        "tags": ["Master"],
+        "summary": "รายชื่อ area ทั้งหมด",
+        "operationId": "getAreas",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "example": {
+              "data": { "areas": [{ "area": "DA", "short_name": "Die Attach" }, { "area": "WB", "short_name": "Wire Bond" }] },
+              "error": null
+            }}}
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/machines": {
+      "get": {
+        "tags": ["Master"],
+        "summary": "รายการเครื่องจักร",
+        "operationId": "getMachines",
+        "parameters": [
+          { "name": "area",     "in": "query", "schema": { "type": "string", "example": "WB" }, "description": "Filter by area" },
+          { "name": "key_only", "in": "query", "schema": { "type": "string", "enum": ["true", "false"] }, "description": "เฉพาะ key machine" }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "example": {
+              "data": { "machines": [{ "machine_id": "WB01", "des_machine": "K&S 8028", "area": "WB", "area_name": "Wire Bond", "mfg": "K&S", "model": "8028", "sn": "12345", "flag_key": 1, "flag_automotive": 0, "flag_gold": 0 }] },
+              "error": null
+            }}}
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/machines/detail": {
+      "get": {
+        "tags": ["Master"],
+        "summary": "ข้อมูล + KPI รายเครื่อง (30 วันย้อนหลัง)",
+        "operationId": "getMachineDetail",
+        "parameters": [
+          { "name": "id",           "in": "query", "required": true, "schema": { "type": "string", "example": "WB01" }, "description": "Machine ID" },
+          { "name": "recent_limit", "in": "query", "schema": { "type": "integer", "default": 25, "maximum": 200 }, "description": "จำนวน recent events" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "info": {}, "kpis": { "down_events": 3, "avg_mttr_min": 45, "pm_events": 1 }, "recent_events": [] }, "error": null }}}},
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/machines/records": {
+      "get": {
+        "tags": ["Master"],
+        "summary": "ประวัติ records ดิบทั้งหมดของเครื่อง",
+        "operationId": "getMachineRecords",
+        "parameters": [
+          { "name": "id",    "in": "query", "required": true, "schema": { "type": "string" }, "description": "Machine ID" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 200, "maximum": 1000 } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "records": [] }, "error": null }}}},
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/overview": {
+      "get": {
+        "tags": ["Overview"],
+        "summary": "KPI ภาพรวม + status matrix ปัจจุบัน",
+        "description": "แสดง total machines, running, down, waiting, on_process, closed_this_shift และ status matrix แยก job_type",
+        "operationId": "getOverview",
+        "parameters": [
+          { "$ref": "#/components/parameters/areas" }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "example": {
+              "data": {
+                "kpi": { "total_machines": 120, "running": 105, "down": 3, "waiting": 2, "on_process": 10, "closed_this_shift": 8 },
+                "status_matrix": [{ "job_type": "M/C DOWN", "waiting": 2, "on_process": 10, "closed": 8, "total": 20 }],
+                "updated_at": "2026-06-08T10:00:00Z"
+              },
+              "error": null
+            }}}
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/overview/open-jobs": {
+      "get": {
+        "tags": ["Overview"],
+        "summary": "งานที่ยังเปิดอยู่ทั้งหมด",
+        "operationId": "getOpenJobs",
+        "parameters": [
+          { "$ref": "#/components/parameters/areas" },
+          { "name": "job_type", "in": "query", "schema": { "type": "string", "example": "M/C DOWN" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "jobs": [{ "code_machine": "WB01", "area": "WB", "job_type": "M/C DOWN", "wait_min": 45, "status": "Waiting" }] }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/utilization/detail": {
+      "get": {
+        "tags": ["Utilization"],
+        "summary": "รายละเอียด utilization + monthly trend + scatter plot",
+        "description": "ประมวลผล 8 queries พร้อมกัน: KPI totals, area breakdown, monthly trend, machine scatter, top downtime causes",
+        "operationId": "getUtilizationDetail",
+        "parameters": [
+          { "$ref": "#/components/parameters/start" },
+          { "$ref": "#/components/parameters/end" },
+          { "$ref": "#/components/parameters/areas" },
+          { "$ref": "#/components/parameters/shift" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "raw": { "kpi_totals": [], "area_totals": [], "machine_count": 50 }, "monthly_trend": [], "scatter": [], "top_down": [], "top_lost": [] }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/utilization/by-machine": {
+      "get": {
+        "tags": ["Utilization"],
+        "summary": "Utilization แยกรายเครื่อง (เรียงจากต่ำสุด)",
+        "operationId": "getUtilizationByMachine",
+        "parameters": [
+          { "$ref": "#/components/parameters/start" },
+          { "$ref": "#/components/parameters/end" },
+          { "$ref": "#/components/parameters/areas" },
+          { "$ref": "#/components/parameters/shift" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "rows": [{ "code_machine": "WB01", "area": "WB", "utilization_pct": 72.5, "down_min": 180, "pm_min": 60, "lost_min": 30 }] }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/utilization/attention": {
+      "get": {
+        "tags": ["Utilization"],
+        "summary": "Top 10 เครื่องที่ต้องให้ความสนใจ (score สูงสุด)",
+        "operationId": "getUtilizationAttention",
+        "parameters": [
+          { "$ref": "#/components/parameters/start" },
+          { "$ref": "#/components/parameters/end" },
+          { "$ref": "#/components/parameters/areas" },
+          { "$ref": "#/components/parameters/shift" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "rows": [{ "machine_id": "WB01", "area": "WB", "down_hours": 12.5, "event_count": 8, "avg_mttr_min": 94, "score": 34.1 }] }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/downtime/detail": {
+      "get": {
+        "tags": ["Downtime"],
+        "summary": "วิเคราะห์ downtime — Pareto สาเหตุ + machines by reason + daily shift",
+        "operationId": "getDowntimeDetail",
+        "parameters": [
+          { "$ref": "#/components/parameters/start" },
+          { "$ref": "#/components/parameters/end" },
+          { "$ref": "#/components/parameters/areas" },
+          { "$ref": "#/components/parameters/shift" },
+          { "name": "job_types",  "in": "query", "schema": { "type": "string", "example": "M/C DOWN" }, "description": "Comma-separated job types (default: M/C DOWN)" },
+          { "name": "reason_col", "in": "query", "schema": { "type": "string", "enum": ["cause", "des_job"], "default": "cause" }, "description": "คอลัมน์สาเหตุ" },
+          { "name": "limit",      "in": "query", "schema": { "type": "integer", "default": 20, "minimum": 5, "maximum": 50 }, "description": "จำนวน reason rows สูงสุด" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "reason": [], "machines_by_reason": [], "daily_shift": [], "kpi": { "total_hours": 42.5, "total_events": 18, "avg_repair_h": 2.36, "top_machine": "WB01", "top_machine_h": 8.5 } }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/downtime/machines": {
+      "get": {
+        "tags": ["Downtime"],
+        "summary": "รายชื่อเครื่องที่เคย M/C DOWN",
+        "operationId": "getDowntimeMachines",
+        "parameters": [
+          { "$ref": "#/components/parameters/areas" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "machines": ["WB01", "WB02", "DA03"] }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/downtime/events": {
+      "get": {
+        "tags": ["Downtime"],
+        "summary": "รายการ events ดิบ (กรองได้ละเอียด)",
+        "operationId": "getDowntimeEvents",
+        "parameters": [
+          { "$ref": "#/components/parameters/start" },
+          { "$ref": "#/components/parameters/end" },
+          { "$ref": "#/components/parameters/areas" },
+          { "$ref": "#/components/parameters/shift" },
+          { "name": "job_types", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated, default = ทุก type" },
+          { "name": "machine",   "in": "query", "schema": { "type": "string", "example": "WB01" } },
+          { "name": "symptom",   "in": "query", "schema": { "type": "string" }, "description": "des_job" },
+          { "name": "cause",     "in": "query", "schema": { "type": "string" } },
+          { "name": "tech",      "in": "query", "schema": { "type": "string" }, "description": "ชื่อช่าง" },
+          { "name": "limit",     "in": "query", "schema": { "type": "integer", "default": 500, "minimum": 50, "maximum": 2000 } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "events": [{ "event_time": "2026-05-01T08:30:00Z", "machine_id": "WB01", "area": "WB", "job_type": "M/C DOWN", "cause": "BOND FAIL", "wait_min": 15, "repair_min": 60 }], "total": 1 }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/inventory/machines": {
+      "get": {
+        "tags": ["Inventory"],
+        "summary": "ข้อมูลเครื่องจักรทั้งหมด + flags",
+        "operationId": "getInventoryMachines",
+        "parameters": [
+          { "name": "area",     "in": "query", "schema": { "type": "string" } },
+          { "name": "key_only", "in": "query", "schema": { "type": "string", "enum": ["true", "false"] } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "machines": [{ "machine_id": "WB01", "mfg": "K&S", "model": "8028", "flag_key": 1, "flag_automotive": 0, "year_install": 2018 }] }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/inventory/downtime": {
+      "get": {
+        "tags": ["Inventory"],
+        "summary": "สรุป downtime 7 วันย้อนหลัง รายเครื่อง",
+        "operationId": "getInventoryDowntime",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "rows": [{ "code_machine": "WB01", "down_events": 3, "down_hrs": 4.5, "avg_mttr_min": 90 }] }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/tech/metrics": {
+      "get": {
+        "tags": ["Tech"],
+        "summary": "คะแนน KPI รายช่าง (MTTR, Response, FTFR, Volume, Versatility)",
+        "description": "Score 0-100: A≥85, B≥70, C≥55, D<55\n\n**FTFR** = First Time Fix Rate (งานที่แก้ได้ครั้งเดียวไม่กลับมาเสียใน 7 วัน)",
+        "operationId": "getTechMetrics",
+        "parameters": [
+          { "$ref": "#/components/parameters/start" },
+          { "$ref": "#/components/parameters/end" },
+          { "$ref": "#/components/parameters/areas" },
+          { "$ref": "#/components/parameters/shift" },
+          { "name": "job_type", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "rows": [{ "technician": "สมชาย", "score": 82.5, "grade": "B", "job_count": 45, "avg_repair_min": 62, "ftfr_pct": 88.9 }] }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/tech/list": {
+      "get": {
+        "tags": ["Tech"],
+        "summary": "รายชื่อช่างจากตาราง TechnicianList",
+        "operationId": "getTechList",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "rows": [{ "Badge": "T001", "Name": "Somchai", "NameTH": "สมชาย", "AERA": "WB" }] }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/wb/packages": {
+      "get": {
+        "tags": ["WB"],
+        "summary": "Package types ที่มีในช่วง 7 วันย้อนหลัง (WB)",
+        "operationId": "getWbPackages",
+        "parameters": [
+          { "name": "date", "in": "query", "required": true, "schema": { "type": "string", "format": "date", "example": "2026-06-08" }, "description": "วันอ้างอิง (required)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "packages": ["QFN 3x3", "QFN 5x5"], "options": [{ "value": "__ALL__", "label": "— All Packages —" }] }, "error": null }}}},
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/wb/report": {
+      "get": {
+        "tags": ["WB"],
+        "summary": "รายงาน utilization รายเครื่อง WB ต่อ shift",
+        "description": "แสดง utilization %, downtime, setup loss รายเครื่อง พร้อม fleet KPI summary",
+        "operationId": "getWbReport",
+        "parameters": [
+          { "name": "date",     "in": "query", "required": true, "schema": { "type": "string", "format": "date", "example": "2026-06-08" } },
+          { "name": "shift",    "in": "query", "schema": { "type": "string", "enum": ["Night", "Day"], "default": "Night" } },
+          { "name": "packages", "in": "query", "schema": { "type": "string", "example": "__ALL__" }, "description": "__ALL__, __QFN__, หรือ package names คั่น comma" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "machines": [], "kpi": { "total": 50, "avg_util": 87.3, "n_down": 3 }, "pkg_label": "All Packages", "shift": "Night", "time_range": "19:00 → 07:00" }, "error": null }}}},
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/da/packages": {
+      "get": {
+        "tags": ["DA"],
+        "summary": "Package types ที่มีในช่วง 7 วันย้อนหลัง (DA)",
+        "operationId": "getDaPackages",
+        "parameters": [
+          { "name": "date", "in": "query", "required": true, "schema": { "type": "string", "format": "date", "example": "2026-06-08" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "packages": ["SOT-23"], "options": [] }, "error": null }}}},
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/da/report": {
+      "get": {
+        "tags": ["DA"],
+        "summary": "รายงาน utilization รายเครื่อง DA ต่อ shift",
+        "operationId": "getDaReport",
+        "parameters": [
+          { "name": "date",     "in": "query", "required": true, "schema": { "type": "string", "format": "date", "example": "2026-06-08" } },
+          { "name": "shift",    "in": "query", "schema": { "type": "string", "enum": ["Night", "Day"], "default": "Night" } },
+          { "name": "packages", "in": "query", "schema": { "type": "string", "example": "__ALL__" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "machines": [], "kpi": {}, "shift": "Night" }, "error": null }}}},
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/items": {
+      "get": {
+        "tags": ["Items"],
+        "summary": "รายการ items (SQLite)",
+        "operationId": "listItems",
+        "parameters": [
+          { "name": "page",  "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "data": [], "page": 1, "limit": 20, "total": 0 }, "error": null }}}}
+        }
+      },
+      "post": {
+        "tags": ["Items"],
+        "summary": "สร้าง item ใหม่",
+        "operationId": "createItem",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "description": { "type": "string" } } } } }
+        },
+        "responses": {
+          "201": { "description": "Created" },
+          "422": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+
+    "/api/v1/items/{id}": {
+      "get": {
+        "tags": ["Items"],
+        "summary": "ดู item รายชิ้น",
+        "operationId": "getItem",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "OK" }, "404": { "$ref": "#/components/responses/BadRequest" } }
+      },
+      "put": {
+        "tags": ["Items"],
+        "summary": "แก้ไข item",
+        "operationId": "updateItem",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string" }, "description": { "type": "string" } } } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": {
+        "tags": ["Items"],
+        "summary": "ลบ item (soft delete)",
+        "operationId": "deleteItem",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "204": { "description": "Deleted" } }
+      }
+    }
+
+  }
+}

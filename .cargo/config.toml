@@ -1,0 +1,10 @@
+# .cargo/config.toml
+#
+# ⚠️  MSYS2 ต้องอยู่ใน PATH ก่อนรัน cargo (บน x86_64-pc-windows-gnu toolchain)
+# เพราะ windows-sys 0.61 ต้องการ dlltool.exe เพื่อสร้าง import libs
+#
+# วิธีตั้งชั่วคราว (PowerShell):
+#   $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+#
+# วิธีตั้งถาวร — เพิ่มใน PowerShell profile ($PROFILE):
+#   $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"

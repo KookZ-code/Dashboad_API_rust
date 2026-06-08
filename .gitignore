@@ -1,0 +1,23 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# Environment — ห้าม commit ข้อมูลจริง
+.env
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Docs output (ถ้า generate)
+/docs/output/

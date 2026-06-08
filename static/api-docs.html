@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard API — Swagger UI</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui.css">
+  <style>
+    body { margin: 0; background: #1a1a2e; }
+
+    /* Header bar */
+    .topbar { display: none !important; }
+
+    /* Custom header */
+    #custom-header {
+      background: linear-gradient(135deg, #16213e 0%, #0f3460 100%);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      border-bottom: 1px solid #e94560;
+      box-shadow: 0 2px 12px rgba(0,0,0,.4);
+    }
+    #custom-header .title {
+      font-family: system-ui, sans-serif;
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: .02em;
+    }
+    #custom-header .title span { color: #e94560; }
+    #custom-header .badge {
+      background: #e94560;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    #custom-header .hint {
+      margin-left: auto;
+      font-family: system-ui, sans-serif;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+    #custom-header .hint code {
+      background: rgba(255,255,255,.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #e2e8f0;
+    }
+
+    #swagger-ui { background: #fff; }
+
+    /* Fix info section */
+    .swagger-ui .info { margin: 24px 0 0; }
+    .swagger-ui .info .title { color: #1e293b; }
+    .swagger-ui .info .description { max-width: 700px; }
+
+    /* Tag colors */
+    .swagger-ui .opblock-tag { border-bottom: 1px solid #e2e8f0 !important; }
+    .swagger-ui .opblock-tag small { display: none; }
+
+    /* Method badges */
+    .swagger-ui .opblock.opblock-get    .opblock-summary-method { background: #10b981; }
+    .swagger-ui .opblock.opblock-post   .opblock-summary-method { background: #3b82f6; }
+    .swagger-ui .opblock.opblock-put    .opblock-summary-method { background: #f59e0b; }
+    .swagger-ui .opblock.opblock-delete .opblock-summary-method { background: #ef4444; }
+
+    /* Highlight required params */
+    .swagger-ui .parameter__name.required::after { color: #ef4444; }
+
+    /* Authorize button */
+    .swagger-ui .btn.authorize {
+      color: #e94560 !important;
+      border-color: #e94560 !important;
+    }
+    .swagger-ui .btn.authorize svg { fill: #e94560 !important; }
+  </style>
+</head>
+<body>
+
+<div id="custom-header">
+  <div class="title">Dashboard <span>API</span></div>
+  <div class="badge">v1.0.0</div>
+  <div class="hint">
+    กด <code>Authorize</code> ใส่ API key ก่อน Try it out
+  </div>
+</div>
+
+<div id="swagger-ui"></div>
+
+<script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-bundle.js"></script>
+<script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-standalone-preset.js"></script>
+<script>
+window.onload = function() {
+  SwaggerUIBundle({
+    url: "/openapi.json",
+    dom_id: "#swagger-ui",
+    deepLinking: true,
+    presets: [
+      SwaggerUIBundle.presets.apis,
+      SwaggerUIStandalonePreset
+    ],
+    plugins: [SwaggerUIBundle.plugins.DownloadUrl],
+    layout: "StandaloneLayout",
+    persistAuthorization: true,
+    displayRequestDuration: true,
+    defaultModelsExpandDepth: 0,
+    defaultModelExpandDepth: 2,
+    docExpansion: "list",
+    filter: true,
+    requestInterceptor: function(req) {
+      // ถ้ายังไม่ authorize ลอง check localStorage
+      return req;
+    },
+    onComplete: function() {
+      // Auto-fill server URL จาก window.location
+      const base = window.location.origin;
+      if (base !== "null") {
+        const spec = window.ui.getState().get("spec");
+      }
+    }
+  });
+};
+</script>
+</body>
+</html>
