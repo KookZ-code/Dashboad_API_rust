@@ -19,6 +19,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
@@ -31,6 +32,7 @@ use std::time::SystemTime;
 // and open the cache read-only + immutable. Local paths are opened directly.
 
 static SYNC_MTIME: Mutex<Option<SystemTime>> = Mutex::new(None);
+static SYNCING: AtomicBool = AtomicBool::new(false);
 
 fn is_network_share(p: &str) -> bool {
     p.starts_with("\\\\") || p.starts_with("//")
@@ -40,26 +42,54 @@ fn cache_path() -> PathBuf {
     std::env::temp_dir().join("wb_uph_central_cache.db")
 }
 
-/// Resolve the path to actually open. For a share, mirror → local cache (atomic
-/// rename, re-synced only when the source mtime changes) and return the cache.
+fn mirror_copy(src: &Path, cache: &Path) -> std::io::Result<()> {
+    let tmp = cache.with_extension("tmp");
+    std::fs::copy(src, &tmp)?;
+    std::fs::rename(&tmp, cache)?;
+    Ok(())
+}
+
+/// Resolve the path to open. For a network share: serve the local cache copy
+/// IMMEDIATELY and, if the share is newer, refresh the cache in a background
+/// thread (stale-while-revalidate) — the slow SMB copy never blocks a request.
+/// Only the very first call (no cache yet) copies synchronously.
 fn resolve_db(db_path: &str) -> Result<PathBuf> {
     if !is_network_share(db_path) {
         return Ok(PathBuf::from(db_path));
     }
     let src = Path::new(db_path);
-    let src_mtime = std::fs::metadata(src)
-        .and_then(|m| m.modified())
-        .map_err(|e| anyhow::anyhow!("cannot access central.db at '{db_path}': {e}"))?;
     let cache = cache_path();
+    // A metadata stat over SMB is cheap (unlike copying the whole file).
+    let src_mtime = std::fs::metadata(src).and_then(|m| m.modified()).ok();
 
-    let mut last = SYNC_MTIME.lock().unwrap();
-    let stale = last.map_or(true, |t| t != src_mtime) || !cache.exists();
-    if stale {
-        let tmp = cache.with_extension("tmp");
-        std::fs::copy(src, &tmp).map_err(|e| anyhow::anyhow!("mirror central.db failed: {e}"))?;
-        std::fs::rename(&tmp, &cache).map_err(|e| anyhow::anyhow!("activate mirror failed: {e}"))?;
-        *last = Some(src_mtime);
+    if cache.exists() {
+        let changed = {
+            let last = *SYNC_MTIME.lock().unwrap();
+            match (src_mtime, last) {
+                (Some(cur), Some(prev)) => cur != prev,
+                (Some(_), None) => true,
+                _ => false, // share unreachable → keep serving the cache
+            }
+        };
+        // Kick off one background refresh (guarded so only one runs at a time).
+        if changed && SYNCING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            let src_buf = src.to_path_buf();
+            let cache_buf = cache.clone();
+            let target = src_mtime;
+            std::thread::spawn(move || {
+                if mirror_copy(&src_buf, &cache_buf).is_ok() {
+                    *SYNC_MTIME.lock().unwrap() = target;
+                }
+                SYNCING.store(false, Ordering::SeqCst);
+            });
+        }
+        return Ok(cache);
     }
+
+    // No cache yet — copy once (blocking) so the first request has data.
+    let mt = src_mtime.ok_or_else(|| anyhow::anyhow!("cannot access central.db at '{db_path}'"))?;
+    mirror_copy(src, &cache).map_err(|e| anyhow::anyhow!("mirror central.db failed: {e}"))?;
+    *SYNC_MTIME.lock().unwrap() = Some(mt);
     Ok(cache)
 }
 
