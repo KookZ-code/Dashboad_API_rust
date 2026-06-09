@@ -20,6 +20,8 @@ pub struct Config {
     pub api_key: String,
     pub view_name: String,
     pub machine_table: String,
+    // WB-UPH module — SQLite `central.db` (hourly bond-unit scan records)
+    pub central_db_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +53,7 @@ impl Config {
             api_key: env::var("API_KEY").unwrap_or_default(),
             view_name: env::var("VIEW_NAME").unwrap_or_else(|_| "vw_job_nokey".to_string()),
             machine_table: env::var("MACHINE_TABLE").unwrap_or_else(|_| "dbo.machine".to_string()),
+            central_db_path: require_env("CENTRAL_DB_PATH")?,
         })
     }
 

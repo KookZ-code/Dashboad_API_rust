@@ -21,3 +21,4 @@ Desktop.ini
 
 # Docs output (ถ้า generate)
 /docs/output/
+.gstack/

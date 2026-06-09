@@ -9,6 +9,7 @@ pub mod overview;
 pub mod tech;
 pub mod utilization;
 pub mod wb;
+pub mod wb_uph;
 
 use axum::extract::FromRef;
 use crate::{config::Config, db::{DbPool, MssqlPool}};

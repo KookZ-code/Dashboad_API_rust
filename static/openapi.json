@@ -76,6 +76,7 @@
     { "name": "Tech",         "description": "ประสิทธิภาพช่างซ่อม" },
     { "name": "WB",           "description": "รายงาน Wire Bonding รายกะ" },
     { "name": "DA",           "description": "รายงาน Die Attach รายกะ" },
+    { "name": "WB-UPH",       "description": "Wire Bond hourly UPH monitor — ข้อมูลจาก SQLite central.db (ไม่ใช่ MSSQL). คืนตัวเลขดิบ ส่วน plan target คำนวณฝั่ง frontend" },
     { "name": "Items",        "description": "Items CRUD (SQLite — demo)" }
   ],
   "paths": {
@@ -512,6 +513,142 @@
         "operationId": "deleteItem",
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
         "responses": { "204": { "description": "Deleted" } }
+      }
+    },
+
+    "/api/v1/wb-uph/summary": {
+      "get": {
+        "tags": ["WB-UPH"],
+        "summary": "สรุป output รายกะ (total bonded / active machines / operators)",
+        "description": "อ่านจาก SQLite **central.db** (table `uph_records`) ด้วย reset-aware delta. คืนตัวเลขดิบ — plan target / achievement % คำนวณฝั่ง frontend",
+        "operationId": "getWbUphSummary",
+        "parameters": [
+          { "name": "date",     "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" }, "description": "วันอ้างอิง (default = วันนี้)" },
+          { "name": "shift",    "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" }, "description": "กะ — D (07:00-18:59) หรือ N (19:00 เมื่อวาน-06:59)" },
+          { "name": "packages", "in": "query", "schema": { "type": "string", "example": "36SQFN(UDX),20QFN(G4X)" }, "description": "package keys คั่น comma (ว่าง = ทุก package)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": { "total_bonded": 386391, "active_machines": 123, "active_operators": 31 },
+            "error": null
+          }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+
+    "/api/v1/wb-uph/hourly": {
+      "get": {
+        "tags": ["WB-UPH"],
+        "summary": "output สะสมรายชั่วโมงต่อ package",
+        "description": "คืน map `package → [output ของแต่ละ slot ชั่วโมง]` (12 slot ต่อกะ) แบบ reset-aware",
+        "operationId": "getWbUphHourly",
+        "parameters": [
+          { "name": "date",     "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" } },
+          { "name": "shift",    "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" } },
+          { "name": "packages", "in": "query", "schema": { "type": "string" }, "description": "package keys คั่น comma (ว่าง = ทุก package)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": { "packages": { "36SQFN(UDX)": [4034, 6272, 9680, 14048, 20891, 27117, 30475, 37524, 49516, 53781, 64938, 71800] } },
+            "error": null
+          }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+
+    "/api/v1/wb-uph/packages": {
+      "get": {
+        "tags": ["WB-UPH"],
+        "summary": "bonded ต่อ package ถึงชั่วโมงที่เลือก (raw, ก่อน merge plan)",
+        "description": "คืน `[{ package, bonded }]` เรียงจากมากไปน้อย — การ merge variant ตาม plan และ target/% ทำฝั่ง frontend",
+        "operationId": "getWbUphPackages",
+        "parameters": [
+          { "name": "date",     "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" } },
+          { "name": "shift",    "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" } },
+          { "name": "hour",     "in": "query", "schema": { "type": "integer", "example": 18 }, "description": "ชั่วโมง (default = ชั่วโมงสุดท้ายของกะ)" },
+          { "name": "packages", "in": "query", "schema": { "type": "string" }, "description": "package keys คั่น comma (ว่าง = ทุก package)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": [{ "package": "36SQFN(UDX)", "bonded": 55724 }, { "package": "20QFN(G4X)", "bonded": 42490 }],
+            "error": null
+          }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+
+    "/api/v1/wb-uph/machines": {
+      "get": {
+        "tags": ["WB-UPH"],
+        "summary": "bonded / UPH ต่อเครื่อง สำหรับ package ที่เลือก (raw)",
+        "description": "คืน `pkg_mpc` มาด้วยเพื่อให้ frontend lookup uph_target จาก plan แล้วคำนวณ vs_output_pct + overlay utilization/events จาก WB Report",
+        "operationId": "getWbUphMachines",
+        "parameters": [
+          { "name": "date",    "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" } },
+          { "name": "shift",   "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" } },
+          { "name": "hour",    "in": "query", "schema": { "type": "integer", "example": 18 } },
+          { "name": "package", "in": "query", "required": true, "schema": { "type": "string", "example": "36SQFN(UDX)" }, "description": "package key (required)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": [{ "machine_id": "WB484L", "badge_no": "B20363", "uph": 330.6, "bonded_unit": 5889, "last_scan_ts": "2026-05-29 18:40:15", "pkg_mpc": "36SQFN(UDX)" }],
+            "error": null
+          }}}},
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+
+    "/api/v1/wb-uph/records": {
+      "get": {
+        "tags": ["WB-UPH"],
+        "summary": "scan record ดิบของเครื่อง+package ในกะ (+ tail กะก่อน)",
+        "description": "ไม่พึ่ง plan เลย — คืน `{ current, prev_tail }`. `delta_bonded` คำนวณด้วย LAG() + reset-aware",
+        "operationId": "getWbUphRecords",
+        "parameters": [
+          { "name": "date",       "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" } },
+          { "name": "shift",      "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" } },
+          { "name": "machine_id", "in": "query", "required": true, "schema": { "type": "string", "example": "WB484L" }, "description": "Machine ID (required)" },
+          { "name": "package",    "in": "query", "required": true, "schema": { "type": "string", "example": "36SQFN(UDX)" }, "description": "package key (required)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": { "current": [{ "created_at": "2026-05-29 07:33:37", "lot_id": "MTAI270802522.300", "package_mpc": "36SQFN(UDX)", "uph": 292.1, "bonded_unit": 3242, "delta_bonded": 2434, "badge_no": "B20363" }], "prev_tail": [] },
+            "error": null
+          }}}},
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+
+    "/api/v1/wb-uph/monitor": {
+      "get": {
+        "tags": ["WB-UPH"],
+        "summary": "machine staleness — เครื่องที่ไม่ scan นานเกิน threshold",
+        "description": "`since_min` / `status` (active/stale/no_data) คำนวณจากเวลา server. threshold = 120 นาที",
+        "operationId": "getWbUphMonitor",
+        "parameters": [
+          { "name": "date",  "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" } },
+          { "name": "shift", "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": { "rows": [{ "machine_id": "WB342R", "package": "8SOIC(C2X)", "last_scan_ts": "2026-05-29 11:20:55", "since_min": 240, "status": "stale" }], "as_of": "15:39", "threshold_min": 120 },
+            "error": null
+          }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
       }
     }
 

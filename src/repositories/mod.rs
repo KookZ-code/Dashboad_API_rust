@@ -8,3 +8,4 @@ pub mod overview_repo;
 pub mod tech_repo;
 pub mod utilization_repo;
 pub mod wb_repo;
+pub mod wb_uph_repo;

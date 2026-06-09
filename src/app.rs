@@ -15,7 +15,7 @@ use crate::{
     db::{DbPool, MssqlPool},
     handlers::{
         da, docs::{api_docs, openapi_json}, downtime, health::health_check, inventory, items,
-        master, overview, tech, utilization, wb, AppState,
+        master, overview, tech, utilization, wb, wb_uph, AppState,
     },
     middleware::api_key::require_api_key,
 };
@@ -69,6 +69,13 @@ fn authenticated_routes() -> Router<AppState> {
         // ─── DA ───────────────────────────────────────────────────────────────
         .route("/da/packages",get(da::get_packages))
         .route("/da/report",  get(da::get_report))
+        // ─── WB-UPH (SQLite central.db; hourly bond-unit monitor) ──────────────
+        .route("/wb-uph/summary", get(wb_uph::get_summary))
+        .route("/wb-uph/hourly",  get(wb_uph::get_hourly))
+        .route("/wb-uph/packages",get(wb_uph::get_packages))
+        .route("/wb-uph/machines",get(wb_uph::get_machines))
+        .route("/wb-uph/records", get(wb_uph::get_records))
+        .route("/wb-uph/monitor", get(wb_uph::get_monitor))
         // ─── Items CRUD (SQLite) ───────────────────────────────────────────────
         .route("/items",     get(items::list_items).post(items::create_item))
         .route("/items/{id}",get(items::get_item).put(items::update_item).delete(items::delete_item))
