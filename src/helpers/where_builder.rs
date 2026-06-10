@@ -30,6 +30,11 @@ pub struct WhereOpts<'a> {
     pub areas:      Option<&'a str>,
     pub shift:      Option<&'a str>,
     pub machine_id: Option<&'a str>,
+    /// Drill-down to a specific chart-day (e.g. "2026-06-09").
+    /// Uses the same day-attribution rule as the shift chart:
+    ///   hour >= 19 → next calendar day  |  hour < 19 → same calendar day.
+    /// This correctly isolates night-shift events that cross midnight.
+    pub drill_day:  Option<&'a str>,
 }
 
 /// Port จาก `buildWhere()` ใน helpers.ts
@@ -66,6 +71,16 @@ pub fn build_where(opts: WhereOpts<'_>) -> WhereClause {
     if let Some(mid) = opts.machine_id {
         clauses.push(format!("RTRIM(LTRIM([{}])) = @p{}", C_MID, params.len() + 1));
         params.push(mid.to_string());
+    }
+    if let Some(dd) = opts.drill_day {
+        // Match the chart's day-attribution: hour>=19 → next day, else same day.
+        clauses.push(format!(
+            "CASE WHEN DATEPART(HOUR,[{C_OPR}]) >= 19 \
+                  THEN CAST(DATEADD(DAY,1,CAST([{C_OPR}] AS DATE)) AS NVARCHAR(10)) \
+                  ELSE CAST(CAST([{C_OPR}] AS DATE) AS NVARCHAR(10)) \
+             END = @p{}", params.len() + 1
+        ));
+        params.push(dd.to_string());
     }
 
     WhereClause { sql: format!("WHERE {}", clauses.join(" AND ")), params }
@@ -125,13 +140,27 @@ pub fn parse_areas(areas: &str) -> Vec<String> {
     areas.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
 }
 
+/// Areas ที่อยู่ใน Oracle เท่านั้น (SQL Server view ไม่มีแถวเหล่านี้)
+pub const ORACLE_AREAS: &[&str] = &["ISO", "FS"];
+
+/// แยก areas string เป็น (sql_areas, ora_areas).
+/// - None input → ทั้งสอง vec ว่าง = "ไม่กรอง" สำหรับทั้งสองแหล่ง
+/// - "WB,ISO,FS" → sql=["WB"], ora=["ISO","FS"]
+pub fn partition_areas(areas: Option<&str>) -> (Vec<String>, Vec<String>) {
+    let Some(s) = areas else { return (vec![], vec![]); };
+    let all = parse_areas(s);
+    let sql: Vec<String> = all.iter().filter(|a| !ORACLE_AREAS.contains(&a.as_str())).cloned().collect();
+    let ora: Vec<String> = all.iter().filter(|a|  ORACLE_AREAS.contains(&a.as_str())).cloned().collect();
+    (sql, ora)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn build_where_empty() {
-        let wc = build_where(WhereOpts { start: None, end: None, areas: None, shift: None, machine_id: None });
+        let wc = build_where(WhereOpts { start: None, end: None, areas: None, shift: None, machine_id: None, drill_day: None });
         assert!(wc.sql.starts_with("WHERE"));
         assert!(wc.params.is_empty());
     }
@@ -140,7 +169,7 @@ mod tests {
     fn build_where_with_date_range() {
         let wc = build_where(WhereOpts {
             start: Some("2024-01-01"), end: Some("2024-01-31"),
-            areas: None, shift: None, machine_id: None,
+            areas: None, shift: None, machine_id: None, drill_day: None,
         });
         assert!(wc.sql.contains("@p1") && wc.sql.contains("@p2"));
         assert_eq!(wc.params.len(), 2);
