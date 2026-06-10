@@ -20,8 +20,8 @@ use crate::{
     middleware::api_key::require_api_key,
 };
 
-pub fn create_app(sqlite: DbPool, mssql: MssqlPool, config: Config) -> Router {
-    let state = AppState::new(sqlite, mssql, config.clone());
+pub fn create_app(sqlite: DbPool, mssql: MssqlPool, oracle: std::sync::Arc<crate::oracle::OracleCache>, config: Config) -> Router {
+    let state = AppState::new(sqlite, mssql, oracle, config.clone());
     let cors  = build_cors(&config.frontend_origin, config.is_production());
 
     // Apply API key middleware only to authenticated routes

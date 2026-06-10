@@ -1,16 +1,19 @@
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
-use crate::{db::MssqlPool, errors::AppError, helpers::where_builder::*};
+use crate::{db::MssqlPool, errors::AppError, helpers::where_builder::*,
+            oracle::{OracleCache, agg::{ora_tech_metrics, TechMetric}}};
 use super::mssql_util::*;
 
 pub struct TechRepo<'a> {
     pub pool: &'a MssqlPool,
     pub view: String,
+    pub oracle: &'a OracleCache,
 }
 
 impl<'a> TechRepo<'a> {
-    pub fn new(pool: &'a MssqlPool, view: impl Into<String>) -> Self {
-        Self { pool, view: view.into() }
+    pub fn new(pool: &'a MssqlPool, view: impl Into<String>, oracle: &'a OracleCache) -> Self {
+        Self { pool, view: view.into(), oracle }
     }
 
     pub async fn metrics(
@@ -58,14 +61,53 @@ impl<'a> TechRepo<'a> {
         );
 
         let rows = exec(self.pool, &sql, &wc.params).await?;
-        if rows.is_empty() { return Ok(vec![]); }
 
-        let avg_jobs: f64 = {
-            let total: f64 = rows.iter().map(|r| f64_val(r, "job_count")).sum();
-            (total / rows.len() as f64).max(1.0)
-        };
+        // MSSQL per-tech metrics
+        let mut metrics: Vec<TechMetric> = rows.iter().map(|r| TechMetric {
+            technician:       str_val(r, "technician"),
+            job_count:        f64_val(r, "job_count"),
+            avg_response_min: f64_val(r, "avg_response_min"),
+            avg_repair_min:   f64_val(r, "avg_repair_min"),
+            area_count:       i32_val(r, "area_count") as i64,
+            ftfr_pct:         f64_val(r, "ftfr_pct"),
+        }).collect();
 
-        Ok(rows.iter().map(|r| tech_score(r, avg_jobs)).collect())
+        // ── Oracle merge (ISO/FS) ──
+        if self.oracle.enabled {
+            let area_vec: Option<Vec<String>> = areas.map(parse_areas);
+            let mut ora = self.oracle.filter_historical(area_vec.as_deref(), start, end, shift);
+            if let Some(jt) = job_type { ora.retain(|r| r.job_type == jt); }
+            metrics.extend(ora_tech_metrics(&ora));
+        }
+
+        if metrics.is_empty() { return Ok(vec![]); }
+
+        // Re-aggregate by technician (a tech may appear in both SQL + Oracle):
+        // job_count sum · response/repair/ftfr = mean of the per-source averages · area_count max
+        struct G { jobs: f64, resp: Vec<f64>, repair: Vec<f64>, area: i64, ftfr: Vec<f64> }
+        let mut g: HashMap<String, G> = HashMap::new();
+        for m in metrics {
+            let e = g.entry(m.technician).or_insert(G { jobs: 0.0, resp: vec![], repair: vec![], area: 0, ftfr: vec![] });
+            e.jobs += m.job_count;
+            e.resp.push(m.avg_response_min);
+            e.repair.push(m.avg_repair_min);
+            e.area = e.area.max(m.area_count);
+            e.ftfr.push(m.ftfr_pct);
+        }
+        let mean = |v: &[f64]| if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 };
+        let merged: Vec<TechMetric> = g.into_iter().map(|(technician, e)| TechMetric {
+            technician,
+            job_count:        e.jobs,
+            avg_response_min: mean(&e.resp),
+            avg_repair_min:   mean(&e.repair),
+            area_count:       e.area,
+            ftfr_pct:         mean(&e.ftfr),
+        }).collect();
+
+        let avg_jobs = (merged.iter().map(|m| m.job_count).sum::<f64>() / merged.len() as f64).max(1.0);
+        let mut out: Vec<Value> = merged.iter().map(|m| tech_score(m, avg_jobs)).collect();
+        out.sort_by(|a, b| b["job_count"].as_i64().unwrap_or(0).cmp(&a["job_count"].as_i64().unwrap_or(0)));
+        Ok(out)
     }
 
     pub async fn list(&self) -> Result<Vec<Value>, AppError> {
@@ -92,18 +134,18 @@ fn norm(val: f64, lo: f64, hi: f64, invert: bool) -> f64 {
     ((if invert { 1.0 - n } else { n }) * 1000.0).round() / 10.0
 }
 
-fn tech_score(row: &tiberius::Row, avg_jobs: f64) -> Value {
-    let job_count = f64_val(row, "job_count");
-    let mttr      = norm(f64_val(row, "avg_repair_min"),   15.0, 480.0, true);
-    let resp      = norm(f64_val(row, "avg_response_min"),  5.0, 120.0, true);
-    let ftfr      = norm(f64_val(row, "ftfr_pct"),         20.0,  80.0, false);
+fn tech_score(m: &TechMetric, avg_jobs: f64) -> Value {
+    let job_count = m.job_count;
+    let mttr      = norm(m.avg_repair_min,   15.0, 480.0, true);
+    let resp      = norm(m.avg_response_min,  5.0, 120.0, true);
+    let ftfr      = norm(m.ftfr_pct,         20.0,  80.0, false);
     let vol       = norm(if avg_jobs > 0.0 { job_count / avg_jobs } else { 0.0 }, 0.3, 1.5, false);
-    let vers      = norm(f64_val(row, "area_count"),        0.0,   3.0, false);
+    let vers      = norm(m.area_count as f64, 0.0,   3.0, false);
     let score     = ((mttr * 0.30 + resp * 0.20 + ftfr * 0.25 + vol * 0.15 + vers * 0.10) * 10.0).round() / 10.0;
     let grade     = if score >= 85.0 { "A" } else if score >= 70.0 { "B" } else if score >= 55.0 { "C" } else { "D" };
 
     json!({
-        "technician":        str_val(row, "technician"),
+        "technician":        m.technician,
         "supervisor":        null,
         "score":             score,
         "grade":             grade,
@@ -113,9 +155,9 @@ fn tech_score(row: &tiberius::Row, avg_jobs: f64) -> Value {
         "volume_score":      vol,
         "versatility_score": vers,
         "job_count":         job_count as i64,
-        "avg_response_min":  f64_val(row, "avg_response_min"),
-        "avg_repair_min":    f64_val(row, "avg_repair_min"),
-        "area_count":        i32_val(row, "area_count"),
-        "ftfr_pct":          f64_val(row, "ftfr_pct"),
+        "avg_response_min":  m.avg_response_min,
+        "avg_repair_min":    m.avg_repair_min,
+        "area_count":        m.area_count,
+        "ftfr_pct":          m.ftfr_pct,
     })
 }

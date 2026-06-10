@@ -11,19 +11,21 @@ pub mod utilization;
 pub mod wb;
 pub mod wb_uph;
 
+use std::sync::Arc;
 use axum::extract::FromRef;
-use crate::{config::Config, db::{DbPool, MssqlPool}};
+use crate::{config::Config, db::{DbPool, MssqlPool}, oracle::OracleCache};
 
 #[derive(Clone)]
 pub struct AppState {
     pub sqlite: DbPool,
     pub mssql:  MssqlPool,
     pub config: Config,
+    pub oracle: Arc<OracleCache>,
 }
 
 impl AppState {
-    pub fn new(sqlite: DbPool, mssql: MssqlPool, config: Config) -> Self {
-        Self { sqlite, mssql, config }
+    pub fn new(sqlite: DbPool, mssql: MssqlPool, oracle: Arc<OracleCache>, config: Config) -> Self {
+        Self { sqlite, mssql, config, oracle }
     }
 }
 

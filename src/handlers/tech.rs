@@ -14,7 +14,7 @@ pub struct MetricsQuery {
 pub async fn get_metrics(
     State(s): State<AppState>, Query(q): Query<MetricsQuery>,
 ) -> AppResult<Json<ApiResponse<Value>>> {
-    let repo = TechRepo::new(&s.mssql, &s.config.view_name);
+    let repo = TechRepo::new(&s.mssql, &s.config.view_name, &s.oracle);
     let rows = repo.metrics(
         q.start.as_deref(), q.end.as_deref(),
         q.areas.as_deref(), q.shift.as_deref(), q.job_type.as_deref(),
@@ -23,7 +23,7 @@ pub async fn get_metrics(
 }
 
 pub async fn get_list(State(s): State<AppState>) -> AppResult<Json<ApiResponse<Value>>> {
-    let repo = TechRepo::new(&s.mssql, &s.config.view_name);
+    let repo = TechRepo::new(&s.mssql, &s.config.view_name, &s.oracle);
     let rows = repo.list().await?;
     Ok(Json(ApiResponse::success(serde_json::json!({ "rows": rows }))))
 }
