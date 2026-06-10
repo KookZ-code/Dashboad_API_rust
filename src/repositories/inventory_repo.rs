@@ -50,7 +50,7 @@ impl<'a> InventoryRepo<'a> {
     pub async fn downtime_summary(&self) -> Result<Vec<Value>, AppError> {
         let sql = format!(
             "SELECT [{C_MID}] AS code_machine, COUNT(*) AS down_events, \
-             ROUND(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}]))/60.0,1) AS down_hrs, \
+             ROUND(CAST(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}])) AS FLOAT)/60.0,1) AS down_hrs, \
              ROUND(AVG(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}])),0) AS avg_mttr_min \
              FROM {} \
              WHERE [{C_JT}] = 'M/C DOWN' AND [{C_TECH}] IS NOT NULL AND [{C_END}] > [{C_TECH}] \

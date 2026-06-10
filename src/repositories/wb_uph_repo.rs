@@ -119,13 +119,23 @@ fn resolve_db(db_path: &str) -> Result<PathBuf> {
         return Ok(cur);
     }
     // No cache yet and another thread is doing the initial copy — wait for it.
-    for _ in 0..120 {
+    // Timeout 60s: large central.db over a slow SMB share can take >6s to copy.
+    for _ in 0..1200 {
         std::thread::sleep(std::time::Duration::from_millis(50));
         if let Some(c) = CACHE_PATH.lock().unwrap().clone() {
             return Ok(c);
         }
     }
-    Err(anyhow::anyhow!("central.db mirror not ready"))
+    Err(anyhow::anyhow!("central.db mirror not ready — share may be unreachable or file too large"))
+}
+
+/// Kick off the initial central.db copy at server startup so the cache is warm
+/// before the first request. Call via spawn_blocking — non-blocking from async.
+pub fn warmup(db_path: &str) {
+    match resolve_db(db_path) {
+        Ok(_)  => tracing::info!("central.db mirror ready"),
+        Err(e) => tracing::warn!("central.db warmup failed (WB-UPH will retry on first request): {e}"),
+    }
 }
 
 fn open(db_path: &str) -> Result<Connection> {

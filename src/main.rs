@@ -6,7 +6,8 @@ mod handlers;
 mod helpers;
 mod middleware;
 mod models;
-mod repositories;
+mod oracle;
+pub mod repositories;
 
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -33,7 +34,38 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("MSSQL pool error: {:?}", e))?;
     info!("MSSQL pool ready");
 
-    let app = app::create_app(sqlite, mssql, config.clone());
+    // Pre-warm central.db mirror (WB-UPH) — copy from network share in background so it's
+    // ready before the first request instead of blocking that first request.
+    let central_path = config.central_db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        repositories::wb_uph_repo::warmup(&central_path);
+    });
+
+    // Oracle cache (ISO/FS) — load in background, refresh on a timer (off if ORA_ENABLED!=1)
+    let oracle = std::sync::Arc::new(oracle::OracleCache::from_config(&config));
+    if config.ora_enabled {
+        let hist = oracle.clone();
+        tokio::spawn(async move {
+            loop {
+                let c = hist.clone();
+                let _ = tokio::task::spawn_blocking(move || c.refresh_historical()).await;
+                tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+            }
+        });
+        let live = oracle.clone();
+        tokio::spawn(async move {
+            loop {
+                let c = live.clone();
+                let _ = tokio::task::spawn_blocking(move || c.refresh_live()).await;
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            }
+        });
+        info!("Oracle refresh tasks started (ISO/FS)");
+    } else {
+        info!("Oracle disabled (ORA_ENABLED != 1) — ISO/FS served MSSQL-only");
+    }
+
+    let app = app::create_app(sqlite, mssql, oracle, config.clone());
 
     let addr = format!("127.0.0.1:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

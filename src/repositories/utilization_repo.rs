@@ -1,16 +1,18 @@
 use serde_json::{json, Value};
 
-use crate::{db::MssqlPool, errors::AppError, helpers::{kpi::*, where_builder::*}};
+use crate::{db::MssqlPool, errors::AppError, helpers::{kpi::*, where_builder::*},
+            oracle::{OracleCache, agg::*}};
 use super::mssql_util::*;
 
 pub struct UtilizationRepo<'a> {
     pub pool: &'a MssqlPool,
     pub view: String,
+    pub oracle: &'a OracleCache,
 }
 
 impl<'a> UtilizationRepo<'a> {
-    pub fn new(pool: &'a MssqlPool, view: impl Into<String>) -> Self {
-        Self { pool, view: view.into() }
+    pub fn new(pool: &'a MssqlPool, view: impl Into<String>, oracle: &'a OracleCache) -> Self {
+        Self { pool, view: view.into(), oracle }
     }
 
     pub async fn detail(
@@ -18,7 +20,7 @@ impl<'a> UtilizationRepo<'a> {
         start: Option<&str>, end: Option<&str>,
         areas: Option<&str>, shift: Option<&str>,
     ) -> Result<Value, AppError> {
-        let wc = build_where(WhereOpts { start, end, areas, shift, machine_id: None });
+        let wc = build_where(WhereOpts { start, end, areas, shift, machine_id: None, drill_day: None });
         let v = &self.view;
         let nd = n_days(start, end);
         let p = &wc.params;
@@ -49,18 +51,18 @@ impl<'a> UtilizationRepo<'a> {
         let sql_scatter = format!(
             "SELECT [{C_MID}] AS machine_id, [{C_AREA}] AS area, COUNT(*) AS freq, \
              ROUND(AVG(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}]))*1.0,1) AS avg_dur_min, \
-             ROUND(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}]))/60.0,1) AS total_hours \
+             ROUND(CAST(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}])) AS FLOAT)/60.0,1) AS total_hours \
              FROM {v} {} AND [{C_JT}] = 'M/C DOWN' \
              GROUP BY [{C_MID}],[{C_AREA}] HAVING COUNT(*) >= 2 ORDER BY total_hours DESC", wc.sql);
         let sql_top_down = format!(
             "SELECT TOP 10 [{C_CAUSE}] AS reason, \
-             SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}]))/60.0 AS hours, COUNT(*) AS events \
+             CAST(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}])) AS FLOAT)/60.0 AS hours, COUNT(*) AS events \
              FROM {v} {} AND [{C_JT}] IN ({down_in}) \
              AND [{C_CAUSE}] IS NOT NULL AND [{C_CAUSE}] != '' \
              GROUP BY [{C_CAUSE}] ORDER BY hours DESC", wc.sql);
         let sql_top_lost = format!(
             "SELECT TOP 10 [{C_CAUSE}] AS reason, \
-             SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}]))/60.0 AS hours, COUNT(*) AS events \
+             CAST(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}])) AS FLOAT)/60.0 AS hours, COUNT(*) AS events \
              FROM {v} {} AND [{C_JT}] IN ({lost_in}) \
              AND [{C_CAUSE}] IS NOT NULL AND [{C_CAUSE}] != '' \
              GROUP BY [{C_CAUSE}] ORDER BY hours DESC", wc.sql);
@@ -77,32 +79,53 @@ impl<'a> UtilizationRepo<'a> {
                 exec(self.pool, &sql_top_lost, p),
             )?;
 
-        let mc_count = r_total_mc.first().map(|r| i64_val(r, "machine_count")).unwrap_or(0);
-        let kpi_rows: Vec<KpiRow> = r_kpi.iter().map(|r| KpiRow {
+        // ── MSSQL typed rows ──
+        let mut mc_count = r_total_mc.first().map(|r| i64_val(r, "machine_count")).unwrap_or(0);
+        let mut kpi_rows: Vec<KpiRow> = r_kpi.iter().map(|r| KpiRow {
             job_type:  str_val(r, "job_type"),
             total_min: f64_val(r, "total_min"),
             wait_min:  f64_val(r, "wait_min"),
         }).collect();
-        let kpis = compute_kpis(&kpi_rows, mc_count, nd, shift);
-
-        let month_rows: Vec<MonthlyRow> = r_month.iter().map(|r| MonthlyRow {
+        let mut month_rows: Vec<MonthlyRow> = r_month.iter().map(|r| MonthlyRow {
             ym:        str_val(r, "ym"),
             job_type:  str_val(r, "job_type"),
             total_min: f64_val(r, "total_min"),
             wait_min:  f64_val(r, "wait_min"),
         }).collect();
-        let monthly = monthly_trend(&month_rows, mc_count, shift);
-
-        let area_rows: Vec<AreaRow> = r_area.iter().map(|r| AreaRow {
+        let mut area_rows: Vec<AreaRow> = r_area.iter().map(|r| AreaRow {
             area:      str_val(r, "area"),
             job_type:  str_val(r, "job_type"),
             total_min: f64_val(r, "total_min"),
             wait_min:  f64_val(r, "wait_min"),
         }).collect();
-        let mc_cnt_rows: Vec<McCountRow> = r_mc_cnt.iter().map(|r| McCountRow {
+        let mut mc_cnt_rows: Vec<McCountRow> = r_mc_cnt.iter().map(|r| McCountRow {
             area:          str_val(r, "area"),
             machine_count: i64_val(r, "machine_count"),
         }).collect();
+        let mut scatter_rows: Vec<ScatterRow> = r_scatter.iter().map(|r| ScatterRow {
+            machine_id:  str_val(r, "machine_id"),
+            area:        str_val(r, "area"),
+            freq:        i32_val(r, "freq") as i64,
+            avg_dur_min: f64_val(r, "avg_dur_min"),
+            total_hours: f64_val(r, "total_hours"),
+        }).collect();
+
+        // ── Oracle merge (ISO/FS) — extend vecs; kpi.rs helpers group+sum ──
+        if self.oracle.enabled {
+            let area_vec: Option<Vec<String>> = areas.map(parse_areas);
+            let ora = self.oracle.filter_historical(area_vec.as_deref(), start, end, shift);
+            if !ora.is_empty() {
+                kpi_rows.extend(ora_kpi_totals(&ora));
+                month_rows.extend(ora_monthly(&ora));
+                area_rows.extend(ora_by_area(&ora));
+                mc_cnt_rows.extend(ora_machine_count(&ora));
+                mc_count += ora_total_machine_count(&ora);
+                scatter_rows.extend(ora_freq_vs_duration(&ora));
+            }
+        }
+
+        let kpis = compute_kpis(&kpi_rows, mc_count, nd, shift);
+        let monthly = monthly_trend(&month_rows, mc_count, shift);
         let area_totals = area_util(&area_rows, &mc_cnt_rows, nd, shift);
 
         let top_causes = |rows: &[tiberius::Row]| -> Value {
@@ -121,11 +144,12 @@ impl<'a> UtilizationRepo<'a> {
             json!(v)
         };
 
-        let scatter: Vec<Value> = r_scatter.iter().map(|r| json!({
-            "code_machine":   str_val(r, "machine_id"),
-            "area":           str_val(r, "area"),
-            "frequency":      i32_val(r, "freq"),
-            "avg_duration_h": r2(f64_val(r, "avg_dur_min") / 60.0),
+        scatter_rows.sort_by(|a, b| b.total_hours.partial_cmp(&a.total_hours).unwrap_or(std::cmp::Ordering::Equal));
+        let scatter: Vec<Value> = scatter_rows.iter().map(|r| json!({
+            "code_machine":   r.machine_id,
+            "area":           r.area,
+            "frequency":      r.freq,
+            "avg_duration_h": r2(r.avg_dur_min / 60.0),
         })).collect();
 
         Ok(json!({
@@ -140,8 +164,8 @@ impl<'a> UtilizationRepo<'a> {
                     "area": a.area, "utilization_pct": a.utilization_pct, "target_pct": a.target_pct
                 })).collect::<Vec<_>>(),
                 "machine_count": mc_count,
-                "area_counts": r_mc_cnt.iter().map(|r| json!({
-                    "area": str_val(r, "area"), "machine_count": i64_val(r, "machine_count")
+                "area_counts": mc_cnt_rows.iter().map(|a| json!({
+                    "area": a.area, "machine_count": a.machine_count
                 })).collect::<Vec<_>>(),
             },
             "monthly_trend": monthly.iter().map(|m| json!({
@@ -159,7 +183,7 @@ impl<'a> UtilizationRepo<'a> {
         start: Option<&str>, end: Option<&str>,
         areas: Option<&str>, shift: Option<&str>,
     ) -> Result<Vec<Value>, AppError> {
-        let wc = build_where(WhereOpts { start, end, areas, shift, machine_id: None });
+        let wc = build_where(WhereOpts { start, end, areas, shift, machine_id: None, drill_day: None });
         let nd = n_days(start, end);
         let h = match shift.map(|s| s.to_uppercase()).as_deref() {
             Some("DAY") | Some("NIGHT") => 12.0,
@@ -213,13 +237,13 @@ impl<'a> UtilizationRepo<'a> {
         start: Option<&str>, end: Option<&str>,
         areas: Option<&str>, shift: Option<&str>,
     ) -> Result<Vec<Value>, AppError> {
-        let wc = build_where(WhereOpts { start, end, areas, shift, machine_id: None });
+        let wc = build_where(WhereOpts { start, end, areas, shift, machine_id: None, drill_day: None });
         let sql = format!(
             "SELECT TOP 10 [{C_MID}] AS machine_id, [{C_AREA}] AS area, \
-             ROUND(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}]))/60.0,1) AS down_hours, \
+             ROUND(CAST(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}])) AS FLOAT)/60.0,1) AS down_hours, \
              COUNT(*) AS event_count, \
              ROUND(AVG(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}]))*1.0,0) AS avg_mttr_min, \
-             ROUND(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}]))/60.0*2.0+COUNT(*) \
+             ROUND(CAST(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}])) AS FLOAT)/60.0*2.0+COUNT(*) \
                +AVG(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}]))/10.0,1) AS score \
              FROM {} {} AND [{C_JT}] = 'M/C DOWN' \
              GROUP BY [{C_MID}],[{C_AREA}] ORDER BY score DESC",
