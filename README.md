@@ -18,8 +18,9 @@ REST API middleware สำหรับ **WB Dashboard** — port จาก Node.
 | **Downtime** | `GET /api/v1/downtime/detail` `/machines` `/events` | วิเคราะห์ downtime + Pareto สาเหตุ |
 | **Inventory** | `GET /api/v1/inventory/machines` `/downtime` | ทะเบียนเครื่องจักร |
 | **Tech** | `GET /api/v1/tech/metrics` `/list` | คะแนน KPI รายช่าง (MTTR, FTFR, Response) |
-| **WB Report** | `GET /api/v1/wb/packages` `/report` | รายงาน Wire Bonding รายกะ |
+| **WB Report** | `GET /api/v1/wb/packages` `/report` | รายงาน Wire Bonding รายกะ (utilization + events) |
 | **DA Report** | `GET /api/v1/da/packages` `/report` | รายงาน Die Attach รายกะ |
+| **WB-UPH** | `GET /api/v1/wb-uph/summary` `/hourly` `/packages` `/machines` `/records` `/monitor` | Wire-Bond hourly **UPH monitor** — อ่านจาก SQLite `central.db` (ไม่ใช่ MSSQL) คืนตัวเลขดิบ (reset-aware delta, MPC key, shift window); plan target คำนวณฝั่ง frontend |
 | **Items** | `CRUD /api/v1/items` | Demo CRUD (SQLite) |
 | **Docs** | `GET /docs` | Swagger UI |
 | **Spec** | `GET /openapi.json` | OpenAPI 3.0 spec |
@@ -39,9 +40,12 @@ HTTP Request
 JSON Response { data: T, error: null }
 ```
 
-**Dual database:**
-- **MSSQL** (tiberius + bb8) — dashboard data จาก SQL Server
-- **SQLite** (sqlx) — items CRUD demo
+**Three data sources:**
+- **MSSQL** (tiberius + bb8) — dashboard data จาก SQL Server (overview, utilization, downtime, tech, wb/da report ฯลฯ)
+- **SQLite `central.db`** (rusqlite) — Wire-Bond hourly UPH (`wb-uph/*`). อ่านจาก network share โดย **mirror มา local cache** (stale-while-revalidate): เสิร์ฟ cache ทันทีแล้ว refresh ใน background — กัน SQLite-over-SMB ที่ช้า/ล็อก ตั้ง path ที่ `CENTRAL_DB_PATH`
+- **SQLite `dev.db`** (sqlx) — items CRUD demo
+
+> `wb-uph` queries เป็น synchronous (rusqlite) จึงรันใน `tokio::task::spawn_blocking`
 
 ---
 
@@ -87,6 +91,9 @@ API_KEY=
 # View/Table names
 VIEW_NAME=vw_job_nokey
 MACHINE_TABLE=dbo.machine
+
+# WB-UPH: path ไป central.db (network share หรือ local). ถ้า path มีช่องว่างต้องครอบ single quote
+CENTRAL_DB_PATH='\\mth-sv-file\wire bond\UPH mornitor\central.db'
 
 # Server
 PORT=8080
@@ -185,8 +192,9 @@ src/
 │   ├── tech.rs
 │   ├── wb.rs
 │   ├── da.rs
+│   ├── wb_uph.rs         — WB-UPH (central.db) handlers
 │   └── docs.rs           — Swagger UI
-├── repositories/         — SQL queries (tiberius)
+├── repositories/         — SQL queries
 │   ├── mssql_util.rs     — try_get helpers
 │   ├── master_repo.rs
 │   ├── overview_repo.rs
@@ -195,7 +203,8 @@ src/
 │   ├── inventory_repo.rs
 │   ├── tech_repo.rs
 │   ├── wb_repo.rs        — WB + DA shift report logic
-│   └── da_repo.rs
+│   ├── da_repo.rs
+│   └── wb_uph_repo.rs    — WB-UPH (rusqlite + central.db mirror)
 ├── helpers/
 │   ├── where_builder.rs  — Parameterized WHERE clause builder
 │   └── kpi.rs            — KPI calculations (utilization, MTTR)
