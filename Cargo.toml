@@ -24,6 +24,9 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate", "uui
 # Database — SQLite (WB-UPH module, central.db; synchronous, run via spawn_blocking)
 rusqlite = { version = "0.31", features = ["bundled"] }
 
+# Database — Oracle (ISO/FS areas; synchronous ODPI-C thick mode, run via spawn_blocking)
+oracle = { version = "0.6", features = ["chrono"] }
+
 # Database — MSSQL (dashboard API)
 tiberius = { version = "0.12", features = ["chrono", "tds73"] }
 bb8 = "0.9"

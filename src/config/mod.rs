@@ -22,6 +22,14 @@ pub struct Config {
     pub machine_table: String,
     // WB-UPH module — SQLite `central.db` (hourly bond-unit scan records)
     pub central_db_path: String,
+    // Oracle (ISO/FS area job/downtime data). All optional; ora_enabled gates usage.
+    pub ora_enabled: bool,
+    pub ora_user: String,
+    pub ora_password: String,
+    pub ora_dsn: String,
+    pub ora_client_lib: String,
+    pub ora_view: String,
+    pub ora_live_view: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +62,13 @@ impl Config {
             view_name: env::var("VIEW_NAME").unwrap_or_else(|_| "vw_job_nokey".to_string()),
             machine_table: env::var("MACHINE_TABLE").unwrap_or_else(|_| "dbo.machine".to_string()),
             central_db_path: require_env("CENTRAL_DB_PATH")?,
+            ora_enabled: env::var("ORA_ENABLED").unwrap_or_default() == "1",
+            ora_user: env::var("ORA_USER").unwrap_or_default(),
+            ora_password: env::var("ORA_PASSWORD").unwrap_or_default(),
+            ora_dsn: env::var("ORA_DSN").unwrap_or_default(),
+            ora_client_lib: env::var("ORA_CLIENT_LIB").unwrap_or_default(),
+            ora_view: env::var("ORA_VIEW").unwrap_or_else(|_| "Vw_Asodowntime_2025on".to_string()),
+            ora_live_view: env::var("ORA_LIVE_VIEW").unwrap_or_else(|_| "EQ_USER.V_EQDOWNTIME".to_string()),
         })
     }
 
