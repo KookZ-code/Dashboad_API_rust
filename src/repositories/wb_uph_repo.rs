@@ -19,7 +19,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
@@ -33,64 +33,99 @@ use std::time::SystemTime;
 
 static SYNC_MTIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 static SYNCING: AtomicBool = AtomicBool::new(false);
+static CACHE_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+static VERSION: AtomicU64 = AtomicU64::new(0);
 
 fn is_network_share(p: &str) -> bool {
     p.starts_with("\\\\") || p.starts_with("//")
 }
 
-fn cache_path() -> PathBuf {
-    std::env::temp_dir().join("wb_uph_central_cache.db")
+fn cache_for(v: u64) -> PathBuf {
+    std::env::temp_dir().join(format!("wb_uph_central_{v}.db"))
 }
 
-fn mirror_copy(src: &Path, cache: &Path) -> std::io::Result<()> {
-    let tmp = cache.with_extension("tmp");
-    std::fs::copy(src, &tmp)?;
-    std::fs::rename(&tmp, cache)?;
-    Ok(())
+/// Delete versioned caches older than `min_keep` (best-effort). Keeps the most
+/// recent few so a request that just captured an older pointer can still open it.
+fn sweep_below(min_keep: u64) {
+    if let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) {
+        for e in rd.flatten() {
+            let p = e.path();
+            let v = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .and_then(|n| n.strip_prefix("wb_uph_central_"))
+                .and_then(|n| n.strip_suffix(".db"))
+                .and_then(|n| n.parse::<u64>().ok());
+            if matches!(v, Some(v) if v < min_keep) {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
 }
 
-/// Resolve the path to open. For a network share: serve the local cache copy
-/// IMMEDIATELY and, if the share is newer, refresh the cache in a background
-/// thread (stale-while-revalidate) — the slow SMB copy never blocks a request.
-/// Only the very first call (no cache yet) copies synchronously.
+/// Copy share → a new versioned cache and swap the pointer. Returns the new path.
+/// Copies to a fresh filename (never rename/overwrite) because on Windows the cache
+/// is held open by SQLite readers and overwriting an open file fails.
+fn copy_and_swap(src: &Path, mtime: Option<SystemTime>) -> Result<PathBuf> {
+    let v = VERSION.fetch_add(1, Ordering::SeqCst) + 1;
+    let dst = cache_for(v);
+    std::fs::copy(src, &dst).map_err(|e| anyhow::anyhow!("mirror central.db failed: {e}"))?;
+    *CACHE_PATH.lock().unwrap() = Some(dst.clone());
+    *SYNC_MTIME.lock().unwrap() = mtime;
+    sweep_below(v.saturating_sub(2)); // keep current + previous two
+    Ok(dst)
+}
+
+/// Resolve the path to open. For a network share: serve the current local cache
+/// IMMEDIATELY and, if the share is newer, refresh in the background (stale-while-
+/// revalidate). The very first copy is single-flighted and blocks until ready.
 fn resolve_db(db_path: &str) -> Result<PathBuf> {
     if !is_network_share(db_path) {
         return Ok(PathBuf::from(db_path));
     }
     let src = Path::new(db_path);
-    let cache = cache_path();
     // A metadata stat over SMB is cheap (unlike copying the whole file).
     let src_mtime = std::fs::metadata(src).and_then(|m| m.modified()).ok();
+    let current = CACHE_PATH.lock().unwrap().clone();
 
-    if cache.exists() {
-        let changed = {
-            let last = *SYNC_MTIME.lock().unwrap();
-            match (src_mtime, last) {
-                (Some(cur), Some(prev)) => cur != prev,
-                (Some(_), None) => true,
-                _ => false, // share unreachable → keep serving the cache
-            }
-        };
-        // Kick off one background refresh (guarded so only one runs at a time).
-        if changed && SYNCING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-            let src_buf = src.to_path_buf();
-            let cache_buf = cache.clone();
-            let target = src_mtime;
-            std::thread::spawn(move || {
-                if mirror_copy(&src_buf, &cache_buf).is_ok() {
-                    *SYNC_MTIME.lock().unwrap() = target;
-                }
-                SYNCING.store(false, Ordering::SeqCst);
-            });
+    let changed = {
+        let last = *SYNC_MTIME.lock().unwrap();
+        match (src_mtime, last) {
+            (Some(c), Some(p)) => c != p,
+            (Some(_), None) => true,
+            _ => false, // share unreachable → keep serving the cache
         }
-        return Ok(cache);
+    };
+
+    if (current.is_none() || changed)
+        && SYNCING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    {
+        if current.is_none() {
+            // First copy — block this request so it has data, then release the guard.
+            let r = copy_and_swap(src, src_mtime);
+            SYNCING.store(false, Ordering::SeqCst);
+            return r;
+        }
+        // Newer share — refresh in the background; serve `current` now.
+        let src_buf = src.to_path_buf();
+        let target = src_mtime;
+        std::thread::spawn(move || {
+            let _ = copy_and_swap(&src_buf, target);
+            SYNCING.store(false, Ordering::SeqCst);
+        });
     }
 
-    // No cache yet — copy once (blocking) so the first request has data.
-    let mt = src_mtime.ok_or_else(|| anyhow::anyhow!("cannot access central.db at '{db_path}'"))?;
-    mirror_copy(src, &cache).map_err(|e| anyhow::anyhow!("mirror central.db failed: {e}"))?;
-    *SYNC_MTIME.lock().unwrap() = Some(mt);
-    Ok(cache)
+    if let Some(cur) = current {
+        return Ok(cur);
+    }
+    // No cache yet and another thread is doing the initial copy — wait for it.
+    for _ in 0..120 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if let Some(c) = CACHE_PATH.lock().unwrap().clone() {
+            return Ok(c);
+        }
+    }
+    Err(anyhow::anyhow!("central.db mirror not ready"))
 }
 
 fn open(db_path: &str) -> Result<Connection> {
