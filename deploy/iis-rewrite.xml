@@ -1,0 +1,31 @@
+<!--
+  IIS URL Rewrite rules สำหรับ reverse proxy ไป DashboardAPI backend
+  วาง rules นี้ใน <system.webServer><rewrite><rules> ของ web.config ใน site ที่ต้องการ
+
+  ต้องติดตั้ง:
+    - IIS URL Rewrite Module 2.x
+    - Application Request Routing (ARR) 3.x
+  และเปิด "Enable proxy" ใน IIS → Application Request Routing Cache → Server Proxy Settings
+
+  Pattern: ทุก request ที่ขึ้นต้นด้วย /dashapi/ จะถูก proxy ไป http://127.0.0.1:8080/
+  ปรับ <match url="^dashapi/(.*)" /> ตาม base path จริงที่ใช้บน IIS
+-->
+<configuration>
+  <system.webServer>
+    <rewrite>
+      <rules>
+        <rule name="DashboardAPI Proxy" stopProcessing="true">
+          <match url="^dashapi/(.*)" />
+          <action
+            type="Rewrite"
+            url="http://127.0.0.1:8080/{R:1}"
+            appendQueryString="true"
+          />
+          <serverVariables>
+            <set name="HTTP_X_FORWARDED_HOST" value="{HTTP_HOST}" />
+          </serverVariables>
+        </rule>
+      </rules>
+    </rewrite>
+  </system.webServer>
+</configuration>
