@@ -1,56 +1,55 @@
-# deploy-server.ps1
-# Deploy Dashboard API จาก GitHub โดยตรงบน Windows Server
+# deploy-server.ps1  (ASCII-only to avoid PS5.1 UTF-8-without-BOM parse errors)
 #
-# ─── Usage ────────────────────────────────────────────────────────────────────
-#   .\deploy-server.ps1 -Setup    # ครั้งแรก: clone + build + register service
-#   .\deploy-server.ps1           # อัปเดต:   git pull + build + restart service
-#   .\deploy-server.ps1 -Remove   # ถอน service (ไม่ลบ files)
+# Usage:
+#   .\deploy-server.ps1 -Setup    # First deploy: git clone + cargo build + register NSSM service
+#   .\deploy-server.ps1           # Update:       git pull + cargo build + restart service
+#   .\deploy-server.ps1 -Remove   # Uninstall service (files kept)
 #
-# ─── Prerequisites บน Server ──────────────────────────────────────────────────
-#   - Git for Windows       https://git-scm.com/download/win
-#   - Rust stable toolchain https://rustup.rs/
-#   - MSYS2 (ucrt64)        https://www.msys2.org/   (สำหรับ oracle/windows-sys)
-#   - NSSM                  https://nssm.cc/download  → วางใน PATH หรือแก้ $NssmPath
-#   - Oracle Instant Client ที่ $OracleClientBin      (ถ้า ORA_ENABLED=1)
+# Prerequisites on the server:
+#   - Git for Windows      https://git-scm.com/download/win
+#   - Rust stable          https://rustup.rs/
+#   - MSYS2 (ucrt64)       https://www.msys2.org/
+#   - NSSM                 https://nssm.cc/download
+#   - Oracle Instant Client at $OracleClientBin  (only if ORA_ENABLED=1)
 #
-# ─── Layout ───────────────────────────────────────────────────────────────────
-#   $BuildDir   = C:\build\Dashboad_API_rust\   ← git repo + cargo target
-#   $ServiceDir = C:\services\dashboard-api\    ← runtime: backend.exe + .env + static\
+# Layout after -Setup:
+#   $BuildDir   = C:\build\Dashboad_API_rust\   <- git repo + cargo target
+#   $ServiceDir = C:\services\dashboard-api\    <- runtime: backend.exe + .env + static\
 #
-#   .env อยู่ที่ $ServiceDir\.env — สร้างด้วยมือจาก .env.example ก่อน -Setup
-#   script ไม่เขียนทับ .env เด็ดขาด
-# ──────────────────────────────────────────────────────────────────────────────
+#   .env lives in $ServiceDir\.env  -- create it manually from .env.example BEFORE -Setup
+#   This script never overwrites .env
 
 param(
-    [switch]$Setup,   # ครั้งแรก
-    [switch]$Remove   # ถอน service
+    [switch]$Setup,
+    [switch]$Remove
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  CONFIG — แก้ค่าเหล่านี้ตาม server จริง
-# ══════════════════════════════════════════════════════════════════════════════
-$RepoUrl        = "https://github.com/KookZ-code/Dashboad_API_rust.git"
-$BuildDir       = "C:\build\Dashboad_API_rust"
-$ServiceDir     = "C:\services\dashboard-api"
-$ServiceName    = "DashboardAPI"
-$NssmPath       = "nssm"          # หรือ "C:\tools\nssm.exe" ถ้าไม่อยู่ใน PATH
-$Msys2Bin       = "C:\msys64\ucrt64\bin"
-$OracleClientBin= "C:\OracleX64\product\11.2.0\client_1\bin"
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+#  CONFIG  -- edit these to match your server
+# ==============================================================================
+$RepoUrl         = "https://github.com/KookZ-code/Dashboad_API_rust.git"
+$BuildDir        = "C:\build\Dashboad_API_rust"
+$ServiceDir      = "C:\services\dashboard-api"
+$ServiceName     = "DashboardAPI"
+$NssmPath        = "nssm"
+$Msys2Bin        = "C:\msys64\ucrt64\bin"
+$OracleClientBin = "C:\OracleX64\product\11.2.0\client_1\bin"
+# ==============================================================================
 
-$ExeDst  = Join-Path $ServiceDir "backend.exe"
-$ExeSrc  = Join-Path $BuildDir   "target\release\backend.exe"
-$LogDir  = Join-Path $ServiceDir "log"
+$ExeDst = Join-Path $ServiceDir "backend.exe"
+$ExeSrc = Join-Path $BuildDir   "target\release\backend.exe"
+$LogDir = Join-Path $ServiceDir "log"
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# --- helpers ------------------------------------------------------------------
 
 function Ensure-Admin {
-    $p = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    $cur = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $p   = [Security.Principal.WindowsPrincipal]$cur
     if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Error "Script ต้องรันด้วยสิทธิ์ Administrator"
+        Write-Error "Run this script as Administrator"
         exit 1
     }
 }
@@ -60,15 +59,15 @@ function Service-Exists {
 }
 
 function Service-Running {
-    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-    $null -ne $svc -and $svc.Status -eq "Running"
+    $s = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    ($null -ne $s) -and ($s.Status -eq "Running")
 }
 
-function Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
-function Ok($msg)   { Write-Host "  OK  $msg" -ForegroundColor Green }
-function Warn($msg) { Write-Host "  !!  $msg" -ForegroundColor Yellow }
+function Step { param($msg) Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
+function Ok   { param($msg) Write-Host "  OK  $msg"    -ForegroundColor Green }
+function Warn { param($msg) Write-Host "  !!  $msg"    -ForegroundColor Yellow }
 
-# ─── Remove ───────────────────────────────────────────────────────────────────
+# --- Remove -------------------------------------------------------------------
 
 if ($Remove) {
     Ensure-Admin
@@ -83,10 +82,9 @@ if ($Remove) {
     exit 0
 }
 
-# ─── Shared: git pull / clone + cargo build ───────────────────────────────────
+# --- Build (shared by Setup and Update) ---------------------------------------
 
 function Run-Build {
-    # เพิ่ม MSYS2 ใน PATH สำหรับ session นี้ (oracle crate + windows-sys ต้องการ gcc/dlltool)
     if ($env:PATH -notlike "*$Msys2Bin*") {
         $env:PATH = "$Msys2Bin;$env:PATH"
         Ok "MSYS2 added to PATH"
@@ -109,7 +107,7 @@ function Run-Build {
     Pop-Location
 
     if (-not (Test-Path $ExeSrc)) {
-        Write-Error "Build สำเร็จแต่ไม่พบ $ExeSrc"
+        Write-Error "Build succeeded but binary not found: $ExeSrc"
         exit 1
     }
     Ok "Build complete: $ExeSrc"
@@ -120,67 +118,67 @@ function Copy-Artifacts {
     New-Item -ItemType Directory -Force $ServiceDir | Out-Null
     New-Item -ItemType Directory -Force $LogDir     | Out-Null
 
-    # binary
     Copy-Item -Force $ExeSrc $ExeDst
     Ok "backend.exe copied"
 
-    # static/ (Swagger UI assets — อยู่ใน git, อัปเดตได้ทุก deploy)
     $staticSrc = Join-Path $BuildDir "static"
     if (Test-Path $staticSrc) {
         Copy-Item -Recurse -Force $staticSrc (Join-Path $ServiceDir "static")
         Ok "static\ synced"
     }
 
-    # .env — ไม่เขียนทับถ้ามีอยู่แล้ว
     $envDst = Join-Path $ServiceDir ".env"
     if (-not (Test-Path $envDst)) {
         $envSrc = Join-Path $BuildDir ".env.example"
         if (Test-Path $envSrc) {
             Copy-Item $envSrc $envDst
-            Warn ".env ไม่พบ — คัดลอก .env.example ไปแทน แก้ค่าจริงก่อน start service!"
+            Warn ".env not found -- copied .env.example. Edit $envDst before starting the service!"
         } else {
-            Warn ".env ไม่พบที่ $envDst — สร้างก่อน start service!"
+            Warn ".env not found at $envDst -- create it before starting the service!"
         }
     } else {
         Ok ".env exists (not overwritten)"
     }
 }
 
-# ─── Setup (first deploy) ─────────────────────────────────────────────────────
+# --- Setup (first deploy) -----------------------------------------------------
 
 if ($Setup) {
     Ensure-Admin
 
     if (Service-Exists) {
-        Write-Error "Service $ServiceName มีอยู่แล้ว — ใช้ -Remove ก่อนถ้าต้องการติดตั้งใหม่, หรือรัน script โดยไม่มี flag เพื่ออัปเดต"
+        Write-Error "Service $ServiceName already exists. Use -Remove to uninstall first, or run without flags to update."
         exit 1
     }
 
     Run-Build
     Copy-Artifacts
 
-    # เพิ่ม Oracle client bin เข้า system PATH (persistent)
+    # Add Oracle client bin to system PATH (persistent, required if ORA_ENABLED=1)
     $syspath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
     if ($syspath -notlike "*$OracleClientBin*") {
-        [System.Environment]::SetEnvironmentVariable("PATH", "$OracleClientBin;$syspath", "Machine")
+        [System.Environment]::SetEnvironmentVariable(
+            "PATH",
+            ($OracleClientBin + ";" + $syspath),
+            "Machine"
+        )
         Ok "Oracle client added to system PATH"
     }
 
     Step "Registering Windows Service: $ServiceName"
-    & $NssmPath install    $ServiceName $ExeDst
-    & $NssmPath set        $ServiceName AppDirectory   $ServiceDir
-    & $NssmPath set        $ServiceName AppExit        Default Restart
-    & $NssmPath set        $ServiceName AppRestartDelay 5000
-    & $NssmPath set        $ServiceName AppStdout      (Join-Path $LogDir "stdout.log")
-    & $NssmPath set        $ServiceName AppStderr      (Join-Path $LogDir "stderr.log")
-    & $NssmPath set        $ServiceName AppRotateFiles 1
-    & $NssmPath set        $ServiceName AppRotateBytes 10485760   # 10 MB
+    & $NssmPath install     $ServiceName $ExeDst
+    & $NssmPath set         $ServiceName AppDirectory    $ServiceDir
+    & $NssmPath set         $ServiceName AppExit         Default Restart
+    & $NssmPath set         $ServiceName AppRestartDelay 5000
+    & $NssmPath set         $ServiceName AppStdout       (Join-Path $LogDir "stdout.log")
+    & $NssmPath set         $ServiceName AppStderr       (Join-Path $LogDir "stderr.log")
+    & $NssmPath set         $ServiceName AppRotateFiles  1
+    & $NssmPath set         $ServiceName AppRotateBytes  10485760
 
-    # ตรวจว่ามี .env ค่าจริงแล้วก่อน start
-    $envPath = Join-Path $ServiceDir ".env"
-    $envReady = (Test-Path $envPath) -and ((Get-Content $envPath) -match "DB_PASSWORD=\S")
+    $envPath  = Join-Path $ServiceDir ".env"
+    $envReady = (Test-Path $envPath) -and ((Get-Content $envPath -Raw) -match "DB_PASSWORD=\S")
     if (-not $envReady) {
-        Warn ".env ยังไม่มีค่าจริง — แก้ $envPath ก่อนแล้วรัน: nssm start $ServiceName"
+        Warn ".env missing real values -- edit $envPath then run: nssm start $ServiceName"
     } else {
         Step "Starting $ServiceName"
         & $NssmPath start $ServiceName
@@ -193,12 +191,12 @@ if ($Setup) {
     exit 0
 }
 
-# ─── Update (default: git pull + build + restart) ─────────────────────────────
+# --- Update (default: git pull + build + restart) -----------------------------
 
 Ensure-Admin
 
 if (-not (Service-Exists)) {
-    Write-Error "Service $ServiceName ไม่พบ — รัน .\deploy-server.ps1 -Setup ก่อน"
+    Write-Error "Service $ServiceName not found. Run .\deploy-server.ps1 -Setup first."
     exit 1
 }
 
