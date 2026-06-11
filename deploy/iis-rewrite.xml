@@ -7,7 +7,7 @@
     - Application Request Routing (ARR) 3.x
   และเปิด "Enable proxy" ใน IIS → Application Request Routing Cache → Server Proxy Settings
 
-  Pattern: ทุก request ที่ขึ้นต้นด้วย /dashapi/ จะถูก proxy ไป http://127.0.0.1:8080/
+  Pattern: ทุก request ที่ขึ้นต้นด้วย /dashapi/ จะถูก proxy ไป http://127.0.0.1:8090/
   ปรับ <match url="^dashapi/(.*)" /> ตาม base path จริงที่ใช้บน IIS
 -->
 <configuration>
@@ -18,7 +18,7 @@
           <match url="^dashapi/(.*)" />
           <action
             type="Rewrite"
-            url="http://127.0.0.1:8080/{R:1}"
+            url="http://127.0.0.1:8090/{R:1}"
             appendQueryString="true"
           />
           <serverVariables>

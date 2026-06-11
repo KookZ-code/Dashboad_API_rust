@@ -6,7 +6,7 @@
     "description": "REST API สำหรับ WB Dashboard — ข้อมูล Machine downtime, Utilization, Technician performance\n\n**Auth:** ส่ง `x-api-key` header ทุก request (ยกเว้น `/health`). ถ้า `API_KEY` ว่างใน `.env` = ปิด auth"
   },
   "servers": [
-    { "url": "http://127.0.0.1:8080", "description": "Local dev" }
+    { "url": "http://127.0.0.1:8090", "description": "Local dev" }
   ],
   "security": [{ "ApiKey": [] }],
   "components": {

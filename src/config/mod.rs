@@ -53,7 +53,7 @@ impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         Ok(Self {
             database_url: require_env("DATABASE_URL")?,
-            port: parse_env("PORT", 8080)?,
+            port: parse_env("PORT", 8090)?,
             frontend_origin: require_env("FRONTEND_ORIGIN")?,
             environment: parse_environment()?,
             db_server: require_env("DB_SERVER")?,

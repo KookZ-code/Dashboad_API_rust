@@ -13,7 +13,7 @@ cargo build --release   ──►  C:\services\dashboard-api\
                                │   └── openapi.json
                                └── log\              ← NSSM สร้างให้อัตโนมัติ
 
-Internet ──► IIS ──► URL Rewrite ──► http://127.0.0.1:8080
+Internet ──► IIS ──► URL Rewrite ──► http://127.0.0.1:8090
 ```
 
 ---
@@ -117,7 +117,7 @@ ORA_CLIENT_LIB='C:\OracleX64\product\11.2.0\client_1\bin'
 ORA_VIEW=Vw_Asodowntime_2025on
 ORA_LIVE_VIEW=EQ_USER.V_EQDOWNTIME
 
-PORT=8080
+PORT=8090
 ENVIRONMENT=production
 FRONTEND_ORIGIN=https://your-domain.com   # URL จริงของ frontend
 RUST_LOG=warn,backend=info
@@ -149,7 +149,7 @@ cd deploy
 Get-Service DashboardAPI
 
 # Health check
-Invoke-WebRequest http://127.0.0.1:8080/api/v1/health | ConvertFrom-Json
+Invoke-WebRequest http://127.0.0.1:8090/api/v1/health | ConvertFrom-Json
 
 # Log
 Get-Content "C:\services\dashboard-api\log\stdout.log" -Tail 30
@@ -179,7 +179,7 @@ Copy-Item target\release\backend.exe deploy\backend.exe
 
 - [ ] `cargo build --release` ผ่านสมบูรณ์ (ไม่มี error)
 - [ ] `backend.exe` รันบน dev machine ได้ด้วย production `.env`
-- [ ] `http://127.0.0.1:8080/api/v1/health` คืน `{"status":"ok"}`
+- [ ] `http://127.0.0.1:8090/api/v1/health` คืน `{"status":"ok"}`
 - [ ] Oracle client ติดตั้งบน server + PATH ตั้งแล้ว (ถ้า `ORA_ENABLED=1`)
 - [ ] `\\mth-sv-file\wire bond\...` เข้าได้จาก service account
 - [ ] PostgreSQL `MTH-DK-B12416:5432` เข้าได้จาก server

@@ -97,7 +97,7 @@ MACHINE_TABLE=dbo.machine
 CENTRAL_DB_PATH='\\mth-sv-file\wire bond\UPH mornitor\central.db'
 
 # Server
-PORT=8080
+PORT=8090
 ENVIRONMENT=development
 FRONTEND_ORIGIN=http://localhost:5174
 RUST_LOG=warn,backend=info
@@ -120,7 +120,7 @@ cargo run
 cargo run
 ```
 
-Server จะเปิดที่ `http://127.0.0.1:8080`
+Server จะเปิดที่ `http://127.0.0.1:8090`
 
 ---
 
@@ -129,7 +129,7 @@ Server จะเปิดที่ `http://127.0.0.1:8080`
 เปิด browser ไปที่:
 
 ```
-http://127.0.0.1:8080/docs
+http://127.0.0.1:8090/docs
 ```
 
 Swagger UI พร้อม Try it out — กด **Authorize** ถ้าเปิด `API_KEY`

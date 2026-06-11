@@ -134,4 +134,4 @@ Write-Host ""
 Write-Host "Installation complete. Service status:"
 Get-Service -Name $ServiceName | Select-Object Name, Status
 Write-Host ""
-Write-Host "Verify: http://127.0.0.1:8080/api/v1/health"
+Write-Host "Verify: http://127.0.0.1:8090/api/v1/health"
