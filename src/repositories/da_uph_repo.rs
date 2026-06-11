@@ -112,7 +112,7 @@ pub async fn query_summary(pool: &PgPool, date: &str, shift: &str, pkgs: &[Strin
                 COUNT(DISTINCT o.operator_id)::int8   AS active_operators
          FROM output_record o
          LEFT JOIN wafer_lot wl ON wl.wafer_lot_id = o.wafer_lot_id
-         WHERE o.created_at >= $1 AND o.created_at <= $2 {pkg_clause}"
+         WHERE o.created_at >= $1::timestamptz AND o.created_at <= $2::timestamptz {pkg_clause}"
     );
     let mut q = sqlx::query(&sql).bind(&w.start).bind(&w.end);
     if has_filter { q = q.bind(pkgs); }
@@ -138,7 +138,7 @@ pub async fn query_hourly(pool: &PgPool, date: &str, shift: &str, pkgs: &[String
                 COALESCE(SUM(o.qty_good), 0)::int8 AS bonded
          FROM output_record o
          LEFT JOIN wafer_lot wl ON wl.wafer_lot_id = o.wafer_lot_id
-         WHERE o.created_at >= $1 AND o.created_at <= $2 {pkg_clause}
+         WHERE o.created_at >= $1::timestamptz AND o.created_at <= $2::timestamptz {pkg_clause}
          GROUP BY pkg_key, hr"
     );
     let mut q = sqlx::query(&sql).bind(&w.start).bind(&w.end);
@@ -182,7 +182,7 @@ pub async fn query_packages(
         "SELECT ({PKG_KEY}) AS package, COALESCE(SUM(o.qty_good), 0)::int8 AS bonded
          FROM output_record o
          LEFT JOIN wafer_lot wl ON wl.wafer_lot_id = o.wafer_lot_id
-         WHERE o.created_at >= $1 AND o.created_at <= $2 {pkg_clause}
+         WHERE o.created_at >= $1::timestamptz AND o.created_at <= $2::timestamptz {pkg_clause}
          GROUP BY ({PKG_KEY})
          ORDER BY bonded DESC"
     );
@@ -243,7 +243,7 @@ pub async fn query_machines(
          JOIN machine m        ON m.id = o.machine_id
          LEFT JOIN operator op ON op.id = o.operator_id
          LEFT JOIN wafer_lot wl ON wl.wafer_lot_id = o.wafer_lot_id
-         WHERE o.created_at >= $1 AND o.created_at <= $2 AND {pkg_match}
+         WHERE o.created_at >= $1::timestamptz AND o.created_at <= $2::timestamptz AND {pkg_match}
          GROUP BY m.code
          ORDER BY bonded_unit DESC"
     );
@@ -317,7 +317,7 @@ pub async fn query_records(
     };
 
     let current_sql = format!(
-        "{base_select} AND o.created_at >= $3 AND o.created_at <= $4 ORDER BY o.created_at ASC"
+        "{base_select} AND o.created_at >= $3::timestamptz AND o.created_at <= $4::timestamptz ORDER BY o.created_at ASC"
     );
     let current: Vec<RawRecord> = sqlx::query(&current_sql)
         .bind(machine_id).bind(package).bind(&w.start).bind(&w.end)
@@ -325,7 +325,7 @@ pub async fn query_records(
         .iter().map(|r| map_row(r, true)).collect();
 
     let prev_sql = format!(
-        "{base_select} AND o.created_at < $3 ORDER BY o.created_at DESC LIMIT 5"
+        "{base_select} AND o.created_at < $3::timestamptz ORDER BY o.created_at DESC LIMIT 5"
     );
     let mut prev_tail: Vec<RawRecord> = sqlx::query(&prev_sql)
         .bind(machine_id).bind(package).bind(&w.start)
@@ -364,7 +364,7 @@ pub async fn query_monitor(pool: &PgPool, date: &str, shift: &str) -> Result<Val
          FROM output_record o
          JOIN machine m        ON m.id = o.machine_id
          LEFT JOIN wafer_lot wl ON wl.wafer_lot_id = o.wafer_lot_id
-         WHERE o.created_at >= $1 AND o.created_at <= $2
+         WHERE o.created_at >= $1::timestamptz AND o.created_at <= $2::timestamptz
          GROUP BY m.code"
     );
     let active_rows = sqlx::query(&active_sql).bind(&w.start).bind(&w.end).fetch_all(pool).await?;
