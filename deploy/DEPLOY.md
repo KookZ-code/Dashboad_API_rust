@@ -3,18 +3,25 @@
 ## ภาพรวม
 
 ```
-Dev machine (build)           Windows Server (run)
-─────────────────────         ─────────────────────────────────
-cargo build --release   ──►  C:\services\dashboard-api\
-                               ├── backend.exe
-                               ├── .env              ← production values
-                               ├── static\
-                               │   ├── api-docs.html
-                               │   └── openapi.json
-                               └── log\              ← NSSM สร้างให้อัตโนมัติ
+Windows Server
+─────────────────────────────────────────────────────────────────
+C:\build\Dashboad_API_rust\        ← git repo + cargo build (deploy-server.ps1 จัดการ)
+C:\services\dashboard-api\         ← runtime (service ชี้มาที่นี่)
+  ├── backend.exe                  ← copy จาก target\release\
+  ├── .env                        ← สร้างด้วยมือจาก .env.example (ไม่อยู่ใน git)
+  ├── static\                     ← sync จาก repo ทุก deploy
+  └── log\                        ← NSSM rotate logs
 
 Internet ──► IIS ──► URL Rewrite ──► http://127.0.0.1:8090
 ```
+
+### deploy-server.ps1 — script หลัก
+
+| Command | ทำอะไร |
+|---|---|
+| `.\deploy-server.ps1 -Setup` | ครั้งแรก: clone repo → build → register service |
+| `.\deploy-server.ps1` | อัปเดต: git pull → build → stop → copy → start |
+| `.\deploy-server.ps1 -Remove` | ถอน service (ไม่ลบไฟล์) |
 
 ---
 
