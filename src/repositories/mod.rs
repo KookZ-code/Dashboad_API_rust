@@ -1,4 +1,5 @@
 pub mod da_repo;
+pub mod da_uph_repo;
 pub mod downtime_repo;
 pub mod inventory_repo;
 pub mod item_repo;

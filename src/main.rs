@@ -41,6 +41,18 @@ async fn main() -> anyhow::Result<()> {
         repositories::wb_uph_repo::warmup(&central_path);
     });
 
+    // Postgres pool สำหรับ DA-UPH — optional. ถ้า DA_DB_URL ว่างหรือต่อไม่ติดตอน startup
+    // ให้ degrade เป็น None (da-uph/* คืน 503) แทนที่จะล้มทั้ง server.
+    let pg = if config.da_db_url.is_empty() {
+        info!("DA-UPH disabled (DA_DB_URL unset)");
+        None
+    } else {
+        match db::create_pg_pool(&config.da_db_url).await {
+            Ok(p) => { info!("Postgres (DA-UPH) pool ready"); Some(p) }
+            Err(e) => { tracing::warn!("DA-UPH Postgres unavailable (da-uph/* will 503): {e}"); None }
+        }
+    };
+
     // Oracle cache (ISO/FS) — load in background, refresh on a timer (off if ORA_ENABLED!=1)
     let oracle = std::sync::Arc::new(oracle::OracleCache::from_config(&config));
     if config.ora_enabled {
@@ -65,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
         info!("Oracle disabled (ORA_ENABLED != 1) — ISO/FS served MSSQL-only");
     }
 
-    let app = app::create_app(sqlite, mssql, oracle, config.clone());
+    let app = app::create_app(sqlite, mssql, oracle, config.clone(), pg);
 
     let addr = format!("127.0.0.1:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

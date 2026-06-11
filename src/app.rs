@@ -12,16 +12,16 @@ use tower_http::{
 
 use crate::{
     config::Config,
-    db::{DbPool, MssqlPool},
+    db::{DbPool, MssqlPool, PgPool},
     handlers::{
-        da, docs::{api_docs, openapi_json}, downtime, health::health_check, inventory, items,
+        da, da_uph, docs::{api_docs, openapi_json}, downtime, health::health_check, inventory, items,
         master, overview, tech, utilization, wb, wb_uph, AppState,
     },
     middleware::api_key::require_api_key,
 };
 
-pub fn create_app(sqlite: DbPool, mssql: MssqlPool, oracle: std::sync::Arc<crate::oracle::OracleCache>, config: Config) -> Router {
-    let state = AppState::new(sqlite, mssql, oracle, config.clone());
+pub fn create_app(sqlite: DbPool, mssql: MssqlPool, oracle: std::sync::Arc<crate::oracle::OracleCache>, config: Config, pg: Option<PgPool>) -> Router {
+    let state = AppState::new(sqlite, mssql, oracle, config.clone(), pg);
     let cors  = build_cors(&config.frontend_origin, config.is_production());
 
     // Apply API key middleware only to authenticated routes
@@ -76,6 +76,13 @@ fn authenticated_routes() -> Router<AppState> {
         .route("/wb-uph/machines",get(wb_uph::get_machines))
         .route("/wb-uph/records", get(wb_uph::get_records))
         .route("/wb-uph/monitor", get(wb_uph::get_monitor))
+        // ─── DA-UPH (PostgreSQL `uph`; hourly output monitor) ──────────────────
+        .route("/da-uph/summary", get(da_uph::get_summary))
+        .route("/da-uph/hourly",  get(da_uph::get_hourly))
+        .route("/da-uph/packages",get(da_uph::get_packages))
+        .route("/da-uph/machines",get(da_uph::get_machines))
+        .route("/da-uph/records", get(da_uph::get_records))
+        .route("/da-uph/monitor", get(da_uph::get_monitor))
         // ─── Items CRUD (SQLite) ───────────────────────────────────────────────
         .route("/items",     get(items::list_items).post(items::create_item))
         .route("/items/{id}",get(items::get_item).put(items::update_item).delete(items::delete_item))

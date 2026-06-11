@@ -22,6 +22,9 @@ pub struct Config {
     pub machine_table: String,
     // WB-UPH module — SQLite `central.db` (hourly bond-unit scan records)
     pub central_db_path: String,
+    // DA-UPH module — PostgreSQL `uph` database (Die Attach scan output).
+    /// ว่าง = ปิด DA-UPH module (endpoints คืน 503)
+    pub da_db_url: String,
     // Oracle (ISO/FS area job/downtime data). All optional; ora_enabled gates usage.
     pub ora_enabled: bool,
     pub ora_user: String,
@@ -62,6 +65,7 @@ impl Config {
             view_name: env::var("VIEW_NAME").unwrap_or_else(|_| "vw_job_nokey".to_string()),
             machine_table: env::var("MACHINE_TABLE").unwrap_or_else(|_| "dbo.machine".to_string()),
             central_db_path: require_env("CENTRAL_DB_PATH")?,
+            da_db_url: env::var("DA_DB_URL").unwrap_or_default(),
             ora_enabled: env::var("ORA_ENABLED").unwrap_or_default() == "1",
             ora_user: env::var("ORA_USER").unwrap_or_default(),
             ora_password: env::var("ORA_PASSWORD").unwrap_or_default(),

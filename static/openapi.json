@@ -77,6 +77,7 @@
     { "name": "WB",           "description": "รายงาน Wire Bonding รายกะ" },
     { "name": "DA",           "description": "รายงาน Die Attach รายกะ" },
     { "name": "WB-UPH",       "description": "Wire Bond hourly UPH monitor — ข้อมูลจาก SQLite central.db (ไม่ใช่ MSSQL). คืนตัวเลขดิบ ส่วน plan target คำนวณฝั่ง frontend" },
+    { "name": "DA-UPH",       "description": "Die Attach hourly output monitor — ข้อมูลจาก PostgreSQL `uph` (DA workstation). qty_good เป็น incremental (ต่างจาก WB ที่เป็น cumulative). คืนตัวเลขดิบ plan target คำนวณฝั่ง frontend. คืน 503 ถ้า DA_DB_URL ไม่ได้ตั้ง" },
     { "name": "Items",        "description": "Items CRUD (SQLite — demo)" }
   ],
   "paths": {
@@ -647,6 +648,148 @@
             "error": null
           }}}},
           "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+
+    "/api/v1/da-uph/summary": {
+      "get": {
+        "tags": ["DA-UPH"],
+        "summary": "สรุป output รายกะ (total bonded / active machines / operators)",
+        "description": "อ่านจาก PostgreSQL `uph` (table `output_record`). `qty_good` เป็น incremental — SUM(qty_good) โดยตรง ไม่มี reset-aware delta. คืน 503 ถ้า DA_DB_URL ไม่ได้ตั้ง",
+        "operationId": "getDaUphSummary",
+        "parameters": [
+          { "name": "date",     "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" }, "description": "วันอ้างอิง (default = วันนี้)" },
+          { "name": "shift",    "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" }, "description": "กะ — D (07:00-18:59) หรือ N (19:00 เมื่อวาน-06:59)" },
+          { "name": "packages", "in": "query", "schema": { "type": "string", "example": "8SOIC(C2X),14SOP(G4X)" }, "description": "package keys คั่น comma (ว่าง = ทุก package)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": { "total_bonded": 128540, "active_machines": 42, "active_operators": 18 },
+            "error": null
+          }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "description": "DA-UPH Postgres ไม่พร้อม (DA_DB_URL ไม่ได้ตั้งหรือต่อไม่ติด)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+
+    "/api/v1/da-uph/hourly": {
+      "get": {
+        "tags": ["DA-UPH"],
+        "summary": "output สะสมรายชั่วโมงต่อ package",
+        "description": "คืน map `package → [output ของแต่ละ slot ชั่วโมง]` (12 slot ต่อกะ). แต่ละ slot เป็น cumulative (running sum ของ SUM hourly increments)",
+        "operationId": "getDaUphHourly",
+        "parameters": [
+          { "name": "date",     "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" } },
+          { "name": "shift",    "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" } },
+          { "name": "packages", "in": "query", "schema": { "type": "string" }, "description": "package keys คั่น comma (ว่าง = ทุก package)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": { "packages": { "8SOIC(C2X)": [1200, 2800, 4600, 6500, 8900, 11200, 13700, 16400, 19300, 22500, 26000, 29800] } },
+            "error": null
+          }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "description": "DA-UPH Postgres ไม่พร้อม" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+
+    "/api/v1/da-uph/packages": {
+      "get": {
+        "tags": ["DA-UPH"],
+        "summary": "bonded ต่อ package ถึงชั่วโมงที่เลือก (raw)",
+        "description": "คืน `[{ package, bonded }]` เรียงจากมากไปน้อย. format `package` = `PACKAGE(MPC)` ถ้ามี MPC",
+        "operationId": "getDaUphPackages",
+        "parameters": [
+          { "name": "date",     "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" } },
+          { "name": "shift",    "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" } },
+          { "name": "hour",     "in": "query", "schema": { "type": "integer", "example": 16 }, "description": "ชั่วโมง (default = ชั่วโมงสุดท้ายของกะ)" },
+          { "name": "packages", "in": "query", "schema": { "type": "string" }, "description": "package keys คั่น comma (ว่าง = ทุก package)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": [{ "package": "8SOIC(C2X)", "bonded": 29800 }, { "package": "14SOP(G4X)", "bonded": 18440 }],
+            "error": null
+          }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "description": "DA-UPH Postgres ไม่พร้อม" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+
+    "/api/v1/da-uph/machines": {
+      "get": {
+        "tags": ["DA-UPH"],
+        "summary": "bonded / UPH ต่อเครื่อง สำหรับ package ที่เลือก (raw)",
+        "description": "`uph` คำนวณจาก bonded / elapsed shift hours. คืน `target_uph` จาก `machine.target_uph` (native DA target ไม่ใช่ plan). **`package` required**",
+        "operationId": "getDaUphMachines",
+        "parameters": [
+          { "name": "date",    "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" } },
+          { "name": "shift",   "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" } },
+          { "name": "hour",    "in": "query", "schema": { "type": "integer", "example": 16 } },
+          { "name": "package", "in": "query", "required": true, "schema": { "type": "string", "example": "8SOIC(C2X)" }, "description": "package key (required)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": [{ "machine_id": "DA01", "badge_no": "B12345", "uph": 1450.0, "bonded_unit": 18125, "last_scan_ts": "2026-05-29 14:33:02", "pkg_mpc": "8SOIC(C2X)", "target_uph": 1600 }],
+            "error": null
+          }}}},
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "description": "DA-UPH Postgres ไม่พร้อม" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+
+    "/api/v1/da-uph/records": {
+      "get": {
+        "tags": ["DA-UPH"],
+        "summary": "scan record ดิบของเครื่อง+package ในกะ (+ tail กะก่อน)",
+        "description": "คืน `{ current, prev_tail }`. DA เป็น incremental ดังนั้น `delta_bonded == bonded_unit == qty_good` ต่อ record (ไม่มี LAG/reset). **`machine_id` + `package` required**",
+        "operationId": "getDaUphRecords",
+        "parameters": [
+          { "name": "date",       "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" } },
+          { "name": "shift",      "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" } },
+          { "name": "machine_id", "in": "query", "required": true, "schema": { "type": "string", "example": "DA01" }, "description": "Machine ID (required)" },
+          { "name": "package",    "in": "query", "required": true, "schema": { "type": "string", "example": "8SOIC(C2X)" }, "description": "package key (required)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": { "current": [{ "created_at": "2026-05-29 07:45:12", "lot_id": "MTAI270901122.100", "package_mpc": "8SOIC(C2X)", "uph": 0.0, "bonded_unit": 500, "delta_bonded": 500, "badge_no": "B12345" }], "prev_tail": [] },
+            "error": null
+          }}}},
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "description": "DA-UPH Postgres ไม่พร้อม" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+
+    "/api/v1/da-uph/monitor": {
+      "get": {
+        "tags": ["DA-UPH"],
+        "summary": "machine staleness — เครื่องที่ไม่ scan นานเกิน threshold",
+        "description": "`since_min` / `status` (active/stale/no_data) คำนวณจากเวลา server. threshold = 120 นาที. `no_data` = เครื่องใน `machine.active=1` ที่ไม่ได้ scan ในกะนี้",
+        "operationId": "getDaUphMonitor",
+        "parameters": [
+          { "name": "date",  "in": "query", "schema": { "type": "string", "format": "date", "example": "2026-05-29" } },
+          { "name": "shift", "in": "query", "schema": { "type": "string", "enum": ["D", "N"], "default": "D" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "example": {
+            "data": { "rows": [{ "machine_id": "DA05", "package": "", "last_scan_ts": null, "since_min": null, "status": "no_data" }, { "machine_id": "DA01", "package": "8SOIC(C2X)", "last_scan_ts": "2026-05-29 14:33:02", "since_min": 45, "status": "active" }], "as_of": "15:18", "threshold_min": 120 },
+            "error": null
+          }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "description": "DA-UPH Postgres ไม่พร้อม" },
           "500": { "$ref": "#/components/responses/InternalError" }
         }
       }

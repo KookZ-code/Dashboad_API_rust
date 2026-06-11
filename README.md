@@ -21,6 +21,7 @@ REST API middleware สำหรับ **WB Dashboard** — port จาก Node.
 | **WB Report** | `GET /api/v1/wb/packages` `/report` | รายงาน Wire Bonding รายกะ (utilization + events) |
 | **DA Report** | `GET /api/v1/da/packages` `/report` | รายงาน Die Attach รายกะ |
 | **WB-UPH** | `GET /api/v1/wb-uph/summary` `/hourly` `/packages` `/machines` `/records` `/monitor` | Wire-Bond hourly **UPH monitor** — อ่านจาก SQLite `central.db` (ไม่ใช่ MSSQL) คืนตัวเลขดิบ (reset-aware delta, MPC key, shift window); plan target คำนวณฝั่ง frontend |
+| **DA-UPH** | `GET /api/v1/da-uph/summary` `/hourly` `/packages` `/machines` `/records` `/monitor` | Die Attach hourly **output monitor** — อ่านจาก PostgreSQL `uph` (DA workstation). qty_good เป็น incremental (SUM โดยตรง). คืน 503 ถ้า `DA_DB_URL` ว่าง |
 | **Items** | `CRUD /api/v1/items` | Demo CRUD (SQLite) |
 | **Docs** | `GET /docs` | Swagger UI |
 | **Spec** | `GET /openapi.json` | OpenAPI 3.0 spec |
@@ -193,6 +194,7 @@ src/
 │   ├── wb.rs
 │   ├── da.rs
 │   ├── wb_uph.rs         — WB-UPH (central.db) handlers
+│   ├── da_uph.rs         — DA-UPH (PostgreSQL uph) handlers
 │   └── docs.rs           — Swagger UI
 ├── repositories/         — SQL queries
 │   ├── mssql_util.rs     — try_get helpers
@@ -204,7 +206,8 @@ src/
 │   ├── tech_repo.rs
 │   ├── wb_repo.rs        — WB + DA shift report logic
 │   ├── da_repo.rs
-│   └── wb_uph_repo.rs    — WB-UPH (rusqlite + central.db mirror)
+│   ├── wb_uph_repo.rs    — WB-UPH (rusqlite + central.db mirror)
+│   └── da_uph_repo.rs    — DA-UPH (sqlx Postgres + incremental SUM)
 ├── helpers/
 │   ├── where_builder.rs  — Parameterized WHERE clause builder
 │   └── kpi.rs            — KPI calculations (utilization, MTTR)

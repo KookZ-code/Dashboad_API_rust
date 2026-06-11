@@ -1,4 +1,4 @@
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use sqlx::{postgres::PgPoolOptions, sqlite::SqlitePoolOptions, SqlitePool};
 use tiberius::{AuthMethod, Config as TibConfig, EncryptionLevel};
 use tracing::info;
 
@@ -16,6 +16,25 @@ pub async fn create_sqlite_pool(database_url: &str) -> Result<DbPool, sqlx::Erro
         .connect(database_url)
         .await?;
     info!("SQLite pool created");
+    Ok(pool)
+}
+
+// ─── Postgres (DA-UPH module; async — no spawn_blocking) ───────────────────────
+//
+// DA scan output lives in PostgreSQL (db `uph` on the operator workstation),
+// unlike WB which reads a SQLite central.db file share. Same query shapes, but
+// async sqlx so the handlers stay plain `async`.
+
+pub type PgPool = sqlx::PgPool;
+
+pub async fn create_pg_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
+    let pool = PgPoolOptions::new()
+        .max_connections(10)
+        .idle_timeout(std::time::Duration::from_secs(600))
+        .acquire_timeout(std::time::Duration::from_secs(30))
+        .connect(database_url)
+        .await?;
+    info!("Postgres (DA-UPH) pool created");
     Ok(pool)
 }
 
