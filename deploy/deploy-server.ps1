@@ -103,6 +103,7 @@ function Run-Build {
 
     Step "cargo build --release"
     Push-Location $BuildDir
+    $env:SQLX_OFFLINE = "true"
     cargo build --release
     Pop-Location
 

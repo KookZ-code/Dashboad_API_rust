@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        UPDATE items\n        SET\n            name        = COALESCE($1, name),\n            description = CASE WHEN $2 THEN $3 ELSE description END,\n            updated_at  = $4\n        WHERE id = $5\n          AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "b769e4701c2c70862463378705686e5fba41bf8229b4dcb23f16d4c1afd0ffb2"
+}

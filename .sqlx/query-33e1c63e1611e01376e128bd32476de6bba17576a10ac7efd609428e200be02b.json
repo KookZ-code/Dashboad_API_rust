@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        UPDATE items\n        SET deleted_at = $1\n        WHERE id = $2\n          AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "33e1c63e1611e01376e128bd32476de6bba17576a10ac7efd609428e200be02b"
+}
