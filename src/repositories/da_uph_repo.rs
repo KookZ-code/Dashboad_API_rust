@@ -18,9 +18,14 @@ use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 
+// "PACKAGE(CODE)" where CODE = 3-char variant slice of mpc (mirrors WB's
+// SUBSTR(mpc,7,3)), else bare package. NOTE: DA's wafer_lot.mpc is the device
+// part number, not A01's leadframe code, so this code does NOT match A01's
+// parenthetical codes — A01 plan/WIP/DOI still attach via the frontend's normPkg
+// name path (it strips the parens). Suffix kept only to mirror WB display.
 const PKG_KEY: &str =
-    "CASE WHEN wl.mpc IS NOT NULL AND wl.mpc <> '' \
-          THEN wl.package || '(' || wl.mpc || ')' \
+    "CASE WHEN wl.mpc IS NOT NULL AND LENGTH(wl.mpc) >= 9 \
+          THEN wl.package || '(' || SUBSTR(wl.mpc, 7, 3) || ')' \
           ELSE COALESCE(wl.package, '') END";
 
 // ─── Shift window ────────────────────────────────────────────────────────────
