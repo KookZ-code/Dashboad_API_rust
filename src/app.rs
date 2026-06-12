@@ -60,6 +60,8 @@ fn authenticated_routes() -> Router<AppState> {
         // ─── Inventory ────────────────────────────────────────────────────────
         .route("/inventory/machines",get(inventory::get_machines))
         .route("/inventory/downtime",get(inventory::get_downtime))
+        .route("/inventory/last-package",get(inventory::get_last_package))
+        .route("/inventory/probe-columns",get(inventory::probe_job_columns))
         // ─── Tech ─────────────────────────────────────────────────────────────
         .route("/tech/metrics",get(tech::get_metrics))
         .route("/tech/list",   get(tech::get_list))

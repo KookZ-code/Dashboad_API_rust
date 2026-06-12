@@ -48,6 +48,8 @@ pub fn i64_val(row: &Row, col: &str) -> i64 {
 pub fn i32_val(row: &Row, col: &str) -> i32 {
     row.try_get::<i32, _>(col).ok().flatten()
         .or_else(|| row.try_get::<i64, _>(col).ok().flatten().map(|v| v as i32))
+        .or_else(|| row.try_get::<bool, _>(col).ok().flatten().map(|v| if v { 1 } else { 0 }))
+        .or_else(|| row.try_get::<u8, _>(col).ok().flatten().map(|v| v as i32))
         .unwrap_or(0)
 }
 

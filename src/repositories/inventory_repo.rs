@@ -7,17 +7,21 @@ pub struct InventoryRepo<'a> {
     pub pool:          &'a MssqlPool,
     pub machine_table: String,
     pub view:          String,
+    pub job_table:     String,
 }
 
 impl<'a> InventoryRepo<'a> {
-    pub fn new(pool: &'a MssqlPool, machine_table: impl Into<String>, view: impl Into<String>) -> Self {
-        Self { pool, machine_table: machine_table.into(), view: view.into() }
+    pub fn new(pool: &'a MssqlPool, machine_table: impl Into<String>, view: impl Into<String>, job_table: impl Into<String>) -> Self {
+        Self { pool, machine_table: machine_table.into(), view: view.into(), job_table: job_table.into() }
     }
 
     pub async fn machines(&self, area: Option<&str>, key_only: bool) -> Result<Vec<Value>, AppError> {
         let sql = format!(
-            "SELECT [code_machine],[des_machine],[mfg],[model],[sn],[id_operation],[short_name],[date_install], \
-             [flag_key],[flag_automotive],[flag_gold] \
+            "SELECT [code_machine],[des_machine],[mfg],[model],[sn],[id_operation],[short_name], \
+             CONVERT(VARCHAR(10),[date_install],120) AS date_install, \
+             CAST([flag_key] AS INT) AS flag_key, \
+             CAST([flag_automotive] AS INT) AS flag_automotive, \
+             CAST([flag_gold] AS INT) AS flag_gold \
              FROM {} WHERE [id_operation] IS NOT NULL AND [id_operation] != '' \
                AND ISNULL([flag_delete],0) != 1 ORDER BY [id_operation],[code_machine]",
             self.machine_table
@@ -45,6 +49,36 @@ impl<'a> InventoryRepo<'a> {
                 })
             })
             .collect())
+    }
+
+    /// Probe job_listx column names (used once to discover schema).
+    pub async fn probe_job_columns(&self) -> Result<Vec<Value>, AppError> {
+        let sql = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS \
+                   WHERE TABLE_CATALOG = 'MTHAI_ppm_db1' AND TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'job_listx' \
+                   ORDER BY ORDINAL_POSITION";
+        let rows = exec(self.pool, sql, &[]).await?;
+        Ok(rows.iter().map(|r| json!({ "col": str_val(r, "COLUMN_NAME") })).collect())
+    }
+
+    /// Get the most recently run [Package Type] per machine from job_listx.
+    /// Column name has a space so it is quoted with []. ROW_NUMBER deduplicates ties.
+    pub async fn last_package(&self) -> Result<Vec<Value>, AppError> {
+        let sql = format!(
+            "SELECT code_machine, [Package Type] AS package_type, CONVERT(VARCHAR(10), datex, 120) AS last_run \
+             FROM ( \
+               SELECT code_machine, [Package Type], datex, \
+                      ROW_NUMBER() OVER (PARTITION BY code_machine ORDER BY datex DESC) AS rn \
+               FROM {} \
+               WHERE code_machine IS NOT NULL AND code_machine != '' \
+             ) r WHERE r.rn = 1",
+            self.job_table
+        );
+        let rows = exec(self.pool, &sql, &[]).await?;
+        Ok(rows.iter().map(|r| json!({
+            "code_machine":  str_val(r, "code_machine"),
+            "package_type":  str_val(r, "package_type"),
+            "last_run":      opt_str(r, "last_run"),
+        })).collect())
     }
 
     pub async fn downtime_summary(&self) -> Result<Vec<Value>, AppError> {

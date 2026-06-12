@@ -20,6 +20,7 @@ pub struct Config {
     pub api_key: String,
     pub view_name: String,
     pub machine_table: String,
+    pub job_table: String,
     // WB-UPH module — SQLite `central.db` (hourly bond-unit scan records)
     pub central_db_path: String,
     // DA-UPH module — PostgreSQL `uph` database (Die Attach scan output).
@@ -64,6 +65,7 @@ impl Config {
             api_key: env::var("API_KEY").unwrap_or_default(),
             view_name: env::var("VIEW_NAME").unwrap_or_else(|_| "vw_job_nokey".to_string()),
             machine_table: env::var("MACHINE_TABLE").unwrap_or_else(|_| "dbo.machine".to_string()),
+            job_table: env::var("JOB_TABLE").unwrap_or_else(|_| "[MTHAI_ppm_db1].[dbo].[job_listx]".to_string()),
             central_db_path: require_env("CENTRAL_DB_PATH")?,
             da_db_url: env::var("DA_DB_URL").unwrap_or_default(),
             ora_enabled: env::var("ORA_ENABLED").unwrap_or_default() == "1",
