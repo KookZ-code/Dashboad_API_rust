@@ -22,6 +22,9 @@ pub enum AppError {
 
     #[error("Bad request: {0}")]
     BadRequest(String),
+
+    #[error("Unauthorized")]
+    Unauthorized,
 }
 
 // tiberius errors → Internal (ไม่ส่ง SQL detail ออก client)
@@ -73,6 +76,7 @@ impl IntoResponse for AppError {
                 (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "An internal error occurred".to_string())
             }
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "BAD_REQUEST", msg.clone()),
+            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED", "Invalid credentials".to_string()),
         };
 
         let body = ErrorResponse {

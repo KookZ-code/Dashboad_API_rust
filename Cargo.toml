@@ -52,6 +52,12 @@ chrono = { version = "0.4", features = ["serde"] }
 # Validation
 validator = { version = "0.18", features = ["derive"] }
 
+# Auth — pure Rust (ไม่ต้อง gcc/ring)
+bcrypt = "0.15"
+hmac   = { version = "0.12", features = ["std"] }
+sha2   = "0.10"
+base64 = "0.22"
+
 [dev-dependencies]
 # Integration testing
 axum-test = "15"

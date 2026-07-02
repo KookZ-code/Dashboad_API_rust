@@ -1,7 +1,7 @@
 use axum::{
     http::{HeaderValue, Method},
     middleware,
-    routing::get,
+    routing::{delete, get, post, put},
     Router,
 };
 use tower_http::{
@@ -14,8 +14,8 @@ use crate::{
     config::Config,
     db::{DbPool, MssqlPool, PgPool},
     handlers::{
-        da, da_uph, docs::{api_docs, openapi_json}, downtime, health::health_check, inventory, items,
-        master, overview, tech, utilization, wb, wb_uph, AppState,
+        auth, da, da_uph, docs::{api_docs, openapi_json}, downtime, health::health_check, inventory, items,
+        master, overview, permissions, tech, utilization, users, wb, wb_uph, AppState,
     },
     middleware::api_key::require_api_key,
 };
@@ -24,19 +24,36 @@ pub fn create_app(sqlite: DbPool, mssql: MssqlPool, oracle: std::sync::Arc<crate
     let state = AppState::new(sqlite, mssql, oracle, config.clone(), pg);
     let cors  = build_cors(&config.frontend_origin, config.is_production());
 
-    // Apply API key middleware only to authenticated routes
-    let auth_routes = authenticated_routes()
+    // Routes protected by API key only (existing behaviour)
+    let api_key_routes = authenticated_routes()
+        .layer(middleware::from_fn_with_state(state.config.clone(), require_api_key));
+
+    // Admin routes: API key only (JWT is enforced by SvelteKit hooks on the frontend)
+    let admin_routes = admin_only_routes()
         .layer(middleware::from_fn_with_state(state.config.clone(), require_api_key));
 
     Router::new()
-        .route("/docs", get(api_docs))              // no auth
-        .route("/openapi.json", get(openapi_json))  // no auth
-        .route("/api/v1/health", get(health_check)) // no auth
-        .nest("/api/v1", auth_routes)
+        .route("/docs",             get(api_docs))      // no auth
+        .route("/openapi.json",     get(openapi_json))  // no auth
+        .route("/api/v1/health",    get(health_check))  // no auth
+        .route("/api/v1/auth/login",post(auth::login))  // no auth
+        .nest("/api/v1", admin_routes)
+        .nest("/api/v1", api_key_routes)
         .with_state(state)
         .layer(CompressionLayer::new())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
+}
+
+fn admin_only_routes() -> Router<AppState> {
+    Router::new()
+        // Users CRUD
+        .route("/users",              get(users::list_users).post(users::create_user))
+        .route("/users/{id}",         put(users::update_user).delete(users::delete_user))
+        .route("/users/{id}/password",put(users::set_password))
+        // Permissions
+        .route("/permissions",        get(permissions::get_permissions))
+        .route("/permissions/{role}", put(permissions::set_permissions))
 }
 
 fn authenticated_routes() -> Router<AppState> {

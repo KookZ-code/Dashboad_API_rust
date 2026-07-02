@@ -34,6 +34,11 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("MSSQL pool error: {:?}", e))?;
     info!("MSSQL pool ready");
 
+    // สร้าง dashboard_role_permissions table ถ้ายังไม่มี
+    repositories::auth_repo::ensure_permissions_table(&mssql).await
+        .map_err(|e| anyhow::anyhow!("Failed to init permissions table: {:?}", e))?;
+    info!("Auth tables ready");
+
     // Pre-warm central.db mirror (WB-UPH) — copy from network share in background so it's
     // ready before the first request instead of blocking that first request.
     let central_path = config.central_db_path.clone();
@@ -79,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = app::create_app(sqlite, mssql, oracle, config.clone(), pg);
 
-    let addr = format!("127.0.0.1:{}", config.port);
+    let addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!("Server listening on http://{}", addr);
 

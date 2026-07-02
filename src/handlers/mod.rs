@@ -1,4 +1,7 @@
+pub mod auth;
 pub mod da;
+pub mod permissions;
+pub mod users;
 pub mod da_uph;
 pub mod docs;
 pub mod downtime;

@@ -1,3 +1,4 @@
+pub mod auth_repo;
 pub mod da_repo;
 pub mod da_uph_repo;
 pub mod downtime_repo;
