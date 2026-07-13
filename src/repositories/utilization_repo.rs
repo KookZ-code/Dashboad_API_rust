@@ -55,17 +55,17 @@ impl<'a> UtilizationRepo<'a> {
              FROM {v} {} AND [{C_JT}] = 'M/C DOWN' \
              GROUP BY [{C_MID}],[{C_AREA}] HAVING COUNT(*) >= 2 ORDER BY total_hours DESC", wc.sql);
         let sql_top_down = format!(
-            "SELECT TOP 10 [{C_CAUSE}] AS reason, \
+            "SELECT TOP 10 [{C_SYM}] AS reason, \
              CAST(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}])) AS FLOAT)/60.0 AS hours, COUNT(*) AS events \
              FROM {v} {} AND [{C_JT}] IN ({down_in}) \
-             AND [{C_CAUSE}] IS NOT NULL AND [{C_CAUSE}] != '' \
-             GROUP BY [{C_CAUSE}] ORDER BY hours DESC", wc.sql);
+             AND [{C_SYM}] IS NOT NULL AND [{C_SYM}] != '' \
+             GROUP BY [{C_SYM}] ORDER BY hours DESC", wc.sql);
         let sql_top_lost = format!(
-            "SELECT TOP 10 [{C_CAUSE}] AS reason, \
+            "SELECT TOP 10 [{C_SYM}] AS reason, \
              CAST(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}])) AS FLOAT)/60.0 AS hours, COUNT(*) AS events \
              FROM {v} {} AND [{C_JT}] IN ({lost_in}) \
-             AND [{C_CAUSE}] IS NOT NULL AND [{C_CAUSE}] != '' \
-             GROUP BY [{C_CAUSE}] ORDER BY hours DESC", wc.sql);
+             AND [{C_SYM}] IS NOT NULL AND [{C_SYM}] != '' \
+             GROUP BY [{C_SYM}] ORDER BY hours DESC", wc.sql);
 
         let (r_kpi, r_month, r_area, r_mc_cnt, r_total_mc, r_scatter, r_top_down, r_top_lost) =
             tokio::try_join!(
@@ -111,6 +111,7 @@ impl<'a> UtilizationRepo<'a> {
         }).collect();
 
         // ── Oracle merge (ISO/FS) — extend vecs; kpi.rs helpers group+sum ──
+        let mut oracle_rows: Vec<crate::oracle::model::OracleRow> = Vec::new();
         if self.oracle.enabled {
             let area_vec: Option<Vec<String>> = areas.map(parse_areas);
             let ora = self.oracle.filter_historical(area_vec.as_deref(), start, end, shift);
@@ -121,6 +122,7 @@ impl<'a> UtilizationRepo<'a> {
                 mc_cnt_rows.extend(ora_machine_count(&ora));
                 mc_count += ora_total_machine_count(&ora);
                 scatter_rows.extend(ora_freq_vs_duration(&ora));
+                oracle_rows = ora;
             }
         }
 
@@ -128,16 +130,39 @@ impl<'a> UtilizationRepo<'a> {
         let monthly = monthly_trend(&month_rows, mc_count, shift);
         let area_totals = area_util(&area_rows, &mc_cnt_rows, nd, shift);
 
-        let top_causes = |rows: &[tiberius::Row]| -> Value {
-            let total: f64 = rows.iter().map(|r| f64_val(r, "hours")).sum::<f64>().max(1.0);
-            let mut cum = 0.0;
-            let v: Vec<Value> = rows.iter().map(|r| {
+        let top_causes = |rows: &[tiberius::Row], oracle_filters: &[&str]| -> Value {
+            let mut agg: std::collections::HashMap<String, (f64, i32)> = Default::default();
+
+            // Aggregate SQL rows
+            for r in rows {
+                let reason = str_val(r, "reason");
                 let h = f64_val(r, "hours");
+                let e = i32_val(r, "events");
+                let e_entry = agg.entry(reason).or_insert((0.0, 0));
+                e_entry.0 += h;
+                e_entry.1 += e;
+            }
+
+            // Aggregate Oracle rows by symptom
+            for ora_r in &oracle_rows {
+                if oracle_filters.contains(&ora_r.job_type.as_str()) && !ora_r.symptom.is_empty() {
+                    let e = agg.entry(ora_r.symptom.clone()).or_insert((0.0, 0));
+                    e.0 += ora_r.repair_min / 60.0;
+                    e.1 += 1;
+                }
+            }
+
+            let mut reasons: Vec<(String, f64, i32)> = agg.into_iter().map(|(k, (h, e))| (k, h, e)).collect();
+            reasons.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let total: f64 = reasons.iter().map(|(_, h, _)| h).sum::<f64>().max(1.0);
+            let mut cum = 0.0;
+            let v: Vec<Value> = reasons.iter().take(10).map(|(reason, h, e)| {
                 cum += h;
                 json!({
-                    "reason":         str_val(r, "reason"),
-                    "hours":          r2(h),
-                    "events":         i32_val(r, "events"),
+                    "reason":         reason,
+                    "hours":          r2(*h),
+                    "events":         e,
                     "cumulative_pct": r2(cum / total * 100.0),
                 })
             }).collect();
@@ -173,8 +198,8 @@ impl<'a> UtilizationRepo<'a> {
                 "down_min": m.down_min, "pm_min": m.pm_min, "lost_min": m.lost_min,
             })).collect::<Vec<_>>(),
             "scatter": scatter,
-            "top_down":  top_causes(&r_top_down),
-            "top_lost":  top_causes(&r_top_lost),
+            "top_down":  top_causes(&r_top_down, DOWN_TYPES),
+            "top_lost":  top_causes(&r_top_lost, LOST_TYPES),
         }))
     }
 
@@ -210,6 +235,22 @@ impl<'a> UtilizationRepo<'a> {
             else if jt == "PM"        { e.2 += tot; }
             else                       { e.3 += tot; }
             e.4 += wt;
+        }
+
+        // ── Oracle merge (ISO/FS) ──
+        if self.oracle.enabled {
+            let area_vec: Option<Vec<String>> = areas.map(parse_areas);
+            let ora = self.oracle.filter_historical(area_vec.as_deref(), start, end, shift);
+            for r in ora {
+                let mid = r.machine_id.clone();
+                let e = map.entry(mid).or_insert((r.area.clone(), 0.0, 0.0, 0.0, 0.0));
+                let tot = r.repair_min as f64;
+                let wt = r.wait_min as f64;
+                if r.job_type == "M/C DOWN"  { e.1 += tot; }
+                else if r.job_type == "PM"   { e.2 += tot; }
+                else                          { e.3 += tot; }
+                e.4 += wt;
+            }
         }
 
         let mut result: Vec<Value> = map.iter().map(|(mid, (area, dn, pm, ls, wt))| {
@@ -250,13 +291,46 @@ impl<'a> UtilizationRepo<'a> {
             self.view, wc.sql
         );
         let rows = exec(self.pool, &sql, &wc.params).await?;
-        Ok(rows.iter().map(|r| json!({
+
+        // ── Oracle merge (ISO/FS, M/C DOWN only) ──
+        let mut all_rows: Vec<Value> = rows.iter().map(|r| json!({
             "machine_id":   str_val(r, "machine_id"),
             "area":         str_val(r, "area"),
             "down_hours":   f64_val(r, "down_hours"),
             "event_count":  i32_val(r, "event_count"),
             "avg_mttr_min": f64_val(r, "avg_mttr_min"),
             "score":        f64_val(r, "score"),
-        })).collect())
+        })).collect();
+
+        if self.oracle.enabled {
+            let area_vec: Option<Vec<String>> = areas.map(parse_areas);
+            let ora = self.oracle.filter_historical(area_vec.as_deref(), start, end, shift);
+            let mut oracle_agg: std::collections::HashMap<String, (String, f64, i32)> = Default::default();
+            for r in ora.iter().filter(|r| r.job_type == "M/C DOWN") {
+                let key = r.machine_id.clone();
+                let e = oracle_agg.entry(key).or_insert((r.area.clone(), 0.0, 0));
+                e.1 += r.repair_min as f64 / 60.0;
+                e.2 += 1;
+            }
+            for (mid, (area, down_hours, event_count)) in oracle_agg {
+                let avg_mttr_min = if event_count > 0 { (down_hours * 60.0 / event_count as f64).round() as f64 } else { 0.0 };
+                let score = down_hours * 2.0 + event_count as f64 + avg_mttr_min / 10.0;
+                all_rows.push(json!({
+                    "machine_id":   mid,
+                    "area":         area,
+                    "down_hours":   r2(down_hours),
+                    "event_count":  event_count,
+                    "avg_mttr_min": r2(avg_mttr_min),
+                    "score":        r2(score),
+                }));
+            }
+        }
+
+        all_rows.sort_by(|a, b| {
+            let sa = a["score"].as_f64().unwrap_or(0.0);
+            let sb = b["score"].as_f64().unwrap_or(0.0);
+            sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(all_rows.into_iter().take(10).collect())
     }
 }

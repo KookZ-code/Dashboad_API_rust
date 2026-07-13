@@ -222,7 +222,7 @@ impl<'a> DowntimeRepo<'a> {
     }
 
     pub async fn machines_with_downtime(&self, areas: Option<&str>) -> Result<Vec<String>, AppError> {
-        let (sql_areas, _) = partition_areas(areas);
+        let (sql_areas, ora_areas) = partition_areas(areas);
         let mut clauses = vec![format!("[{}] = 'M/C DOWN'", C_JT)];
         let mut params: Vec<String> = Vec::new();
         if !sql_areas.is_empty() {
@@ -235,7 +235,22 @@ impl<'a> DowntimeRepo<'a> {
             self.view, clauses.join(" AND ")
         );
         let rows = exec(self.pool, &sql, &params).await?;
-        Ok(rows.iter().map(|r| str_val(r, "machine_id")).collect())
+        let mut machines: std::collections::HashSet<String> = rows.iter().map(|r| str_val(r, "machine_id")).collect();
+
+        // ── Oracle merge (ISO/FS, M/C DOWN only) ──
+        if self.oracle.enabled {
+            let ora = self.oracle.filter_historical(
+                if ora_areas.is_empty() { None } else { Some(ora_areas.as_slice()) },
+                None, None, None
+            );
+            for r in ora.iter().filter(|r| r.job_type == "M/C DOWN") {
+                machines.insert(r.machine_id.clone());
+            }
+        }
+
+        let mut result: Vec<String> = machines.into_iter().collect();
+        result.sort();
+        Ok(result)
     }
 
     pub async fn events(&self, opts: DowntimeEventOpts<'_>) -> Result<Vec<Value>, AppError> {
