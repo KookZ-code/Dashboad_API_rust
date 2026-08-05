@@ -11,8 +11,10 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 
 #[derive(serde::Serialize)]
+#[allow(dead_code)]
 pub struct ErrBody { pub data: Option<()>, pub error: ErrDetail }
 #[derive(serde::Serialize)]
+#[allow(dead_code)]
 pub struct ErrDetail { pub code: &'static str, pub message: &'static str }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +38,7 @@ fn b64_encode(data: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(data)
 }
 
+#[allow(dead_code)]
 fn b64_decode(s: &str) -> Result<Vec<u8>, ()> {
     URL_SAFE_NO_PAD.decode(s).map_err(|_| ())
 }
@@ -52,6 +55,7 @@ pub fn sign_jwt(claims: &Claims, secret: &str) -> String {
     format!("{}.{}", msg, sig)
 }
 
+#[allow(dead_code)]
 pub fn verify_jwt(token: &str, secret: &str) -> Option<Claims> {
     let parts: Vec<&str> = token.splitn(3, '.').collect();
     if parts.len() != 3 { return None; }
@@ -73,6 +77,7 @@ pub fn verify_jwt(token: &str, secret: &str) -> Option<Claims> {
 
 // ─── Axum middleware ──────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub async fn require_jwt(
     State(config): State<Config>,
     mut req: Request<Body>,

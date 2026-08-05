@@ -27,3 +27,14 @@ pub async fn get_list(State(s): State<AppState>) -> AppResult<Json<ApiResponse<V
     let rows = repo.list().await?;
     Ok(Json(ApiResponse::success(serde_json::json!({ "rows": rows }))))
 }
+
+pub async fn get_supervisor_metrics(
+    State(s): State<AppState>, Query(q): Query<MetricsQuery>,
+) -> AppResult<Json<ApiResponse<Value>>> {
+    let repo = TechRepo::new(&s.mssql, &s.config.view_name, &s.oracle);
+    let rows = repo.supervisor_metrics(
+        q.start.as_deref(), q.end.as_deref(),
+        q.areas.as_deref(), q.shift.as_deref(), q.job_type.as_deref(),
+    ).await?;
+    Ok(Json(ApiResponse::success(serde_json::json!({ "rows": rows }))))
+}

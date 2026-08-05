@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{db::MssqlPool, errors::AppError};
-use super::mssql_util::{exec, i32_val, str_val, opt_str, dt_str_or_empty};
+use super::mssql_util::{exec, i32_val, str_val, dt_str_or_empty};
 
 // ─── Models ──────────────────────────────────────────────────────────────────
 

@@ -8,7 +8,6 @@ use serde_json::{json, Value};
 use tokio::task::spawn_blocking;
 
 use crate::{
-    errors::AppResult,
     handlers::AppState,
     repositories::auth_repo::{self, CreateUserReq, UpdateUserReq},
 };

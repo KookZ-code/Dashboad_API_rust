@@ -1,7 +1,7 @@
 use axum::{
     http::{HeaderValue, Method},
     middleware,
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Router,
 };
 use tower_http::{
@@ -80,8 +80,9 @@ fn authenticated_routes() -> Router<AppState> {
         .route("/inventory/last-package",get(inventory::get_last_package))
         .route("/inventory/probe-columns",get(inventory::probe_job_columns))
         // ─── Tech ─────────────────────────────────────────────────────────────
-        .route("/tech/metrics",get(tech::get_metrics))
-        .route("/tech/list",   get(tech::get_list))
+        .route("/tech/metrics",            get(tech::get_metrics))
+        .route("/tech/supervisor-metrics", get(tech::get_supervisor_metrics))
+        .route("/tech/list",               get(tech::get_list))
         // ─── WB ───────────────────────────────────────────────────────────────
         .route("/wb/packages",get(wb::get_packages))
         .route("/wb/report",  get(wb::get_report))

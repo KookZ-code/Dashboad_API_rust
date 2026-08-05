@@ -93,7 +93,8 @@ impl<'a> WbRepo<'a> {
             FROM dbo.job_list WHERE id_operation='WB' AND date_close IS NULL \
             AND code_machine!='' AND LEN(code_machine)>3".to_string();
 
-        let (ev_rows, open_rows) = tokio::try_join!(
+        
+            let (ev_rows, open_rows) = tokio::try_join!(
             exec(self.pool, &sql_ev, &params_ev),
             exec(self.pool, &sql_open, &params_open),
         )?;

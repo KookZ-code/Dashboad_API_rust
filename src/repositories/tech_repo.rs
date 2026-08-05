@@ -24,7 +24,7 @@ impl<'a> TechRepo<'a> {
     ) -> Result<Vec<Value>, AppError> {
         let wc = build_tech_where(TechWhereOpts { start, end, areas, shift, job_type });
         let v = &self.view;
-        // Use a single filtered CTE so params appear only once
+        // Use a single filtered CTE so params appear only once, JOIN TechnicianList for supervisor
         let sql = format!(
             "WITH filtered AS ( \
                SELECT ISNULL(by_perform, by_ack) AS technician, \
@@ -54,8 +54,11 @@ impl<'a> TechRepo<'a> {
                FROM mc_jobs GROUP BY technician \
              ) \
              SELECT b.technician, b.job_count, b.avg_response_min, b.avg_repair_min, b.area_count, \
-                    COALESCE(ROUND(CAST(f.first_fixes AS FLOAT)/NULLIF(f.mc_total,0)*100,1),100) AS ftfr_pct \
-             FROM base b LEFT JOIN ftfr f ON b.technician = f.technician \
+                    COALESCE(ROUND(CAST(f.first_fixes AS FLOAT)/NULLIF(f.mc_total,0)*100,1),100) AS ftfr_pct, \
+                    ISNULL(tl.[Supv], '') AS supervisor \
+             FROM base b \
+             LEFT JOIN ftfr f ON b.technician = f.technician \
+             LEFT JOIN [dbo].[TechnicianList] tl ON b.technician = tl.[Name] OR b.technician = tl.[Badge] \
              ORDER BY b.job_count DESC",
             wc.sql
         );
@@ -105,9 +108,70 @@ impl<'a> TechRepo<'a> {
         }).collect();
 
         let avg_jobs = (merged.iter().map(|m| m.job_count).sum::<f64>() / merged.len() as f64).max(1.0);
-        let mut out: Vec<Value> = merged.iter().map(|m| tech_score(m, avg_jobs)).collect();
+
+        // Build supervisor map from SQL results
+        let mut supv_map: HashMap<String, String> = HashMap::new();
+        for row in &rows {
+            let tech = str_val(row, "technician");
+            let supv = str_val(row, "supervisor");
+            if !tech.is_empty() && !supv.is_empty() {
+                supv_map.insert(tech, supv);
+            }
+        }
+
+        let mut out: Vec<Value> = merged.iter().map(|m| {
+            let supervisor = supv_map.get(&m.technician).cloned();
+            tech_score(m, avg_jobs, supervisor)
+        }).collect();
         out.sort_by(|a, b| b["job_count"].as_i64().unwrap_or(0).cmp(&a["job_count"].as_i64().unwrap_or(0)));
         Ok(out)
+    }
+
+    pub async fn supervisor_metrics(
+        &self,
+        start: Option<&str>, end: Option<&str>,
+        areas: Option<&str>, shift: Option<&str>,
+        job_type: Option<&str>,
+    ) -> Result<Vec<Value>, AppError> {
+        let techs = self.metrics(start, end, areas, shift, job_type).await?;
+
+        struct SupvGroup {
+            jobs: f64,
+            resp: Vec<f64>,
+            repair: Vec<f64>,
+            ftfr: Vec<f64>,
+            count: i64,
+        }
+        let mut supv_data: HashMap<String, SupvGroup> = HashMap::new();
+
+        for tech in &techs {
+            if let Some(supervisor) = tech.get("supervisor").and_then(|v| v.as_str()) {
+                if !supervisor.is_empty() {
+                    let entry = supv_data.entry(supervisor.to_string())
+                        .or_insert(SupvGroup { jobs: 0.0, resp: vec![], repair: vec![], ftfr: vec![], count: 0 });
+                    entry.jobs += tech["job_count"].as_i64().unwrap_or(0) as f64;
+                    entry.resp.push(tech["avg_response_min"].as_f64().unwrap_or(0.0));
+                    entry.repair.push(tech["avg_repair_min"].as_f64().unwrap_or(0.0));
+                    entry.ftfr.push(tech["ftfr_pct"].as_f64().unwrap_or(0.0));
+                    entry.count += 1;
+                }
+            }
+        }
+
+        let mean = |v: &[f64]| if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 };
+        let mut result: Vec<Value> = supv_data.into_iter().map(|(supervisor, g)| {
+            json!({
+                "supervisor": supervisor,
+                "tech_count": g.count,
+                "job_count": g.jobs as i64,
+                "avg_response_min": mean(&g.resp),
+                "avg_repair_min": mean(&g.repair),
+                "ftfr_pct": mean(&g.ftfr),
+            })
+        }).collect();
+
+        result.sort_by(|a, b| b["job_count"].as_i64().unwrap_or(0).cmp(&a["job_count"].as_i64().unwrap_or(0)));
+        Ok(result)
     }
 
     pub async fn list(&self) -> Result<Vec<Value>, AppError> {
@@ -134,7 +198,7 @@ fn norm(val: f64, lo: f64, hi: f64, invert: bool) -> f64 {
     ((if invert { 1.0 - n } else { n }) * 1000.0).round() / 10.0
 }
 
-fn tech_score(m: &TechMetric, avg_jobs: f64) -> Value {
+fn tech_score(m: &TechMetric, avg_jobs: f64, supervisor: Option<String>) -> Value {
     let job_count = m.job_count;
     let mttr      = norm(m.avg_repair_min,   15.0, 480.0, true);
     let resp      = norm(m.avg_response_min,  5.0, 120.0, true);
@@ -146,7 +210,7 @@ fn tech_score(m: &TechMetric, avg_jobs: f64) -> Value {
 
     json!({
         "technician":        m.technician,
-        "supervisor":        null,
+        "supervisor":        supervisor,
         "score":             score,
         "grade":             grade,
         "mttr_score":        mttr,
