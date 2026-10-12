@@ -29,6 +29,12 @@ impl<'a> DaRepo<'a> {
             .filter(|s| !s.is_empty())
             .collect();
         let mut opts: Vec<serde_json::Value> = vec![serde_json::json!({ "value": "__ALL__", "label": "— All Packages —" })];
+        if pkgs.iter().any(|p| !p.to_uppercase().contains("FN")) {
+            opts.push(serde_json::json!({ "value": "__LEAD__", "label": "— All Lead —" }));
+        }
+        if pkgs.iter().any(|p| p.to_uppercase().contains("FN")) {
+            opts.push(serde_json::json!({ "value": "__QFN__", "label": "— All QFN —" }));
+        }
         for p in &pkgs {
             opts.push(serde_json::json!({ "value": p, "label": p }));
         }
