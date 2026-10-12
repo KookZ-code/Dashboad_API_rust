@@ -21,6 +21,9 @@ pub struct Config {
     // JWT auth
     pub jwt_secret: String,
     pub jwt_expire_hours: u64,
+    // Microchip Account API (badge login)
+    pub microchip_api_url: String,
+    pub microchip_timeout_secs: u64,
     pub view_name: String,
     pub machine_table: String,
     pub job_table: String,
@@ -68,6 +71,9 @@ impl Config {
             api_key: env::var("API_KEY").unwrap_or_default(),
             jwt_secret: env::var("JWT_SECRET").unwrap_or_else(|_| "change-me-in-production".to_string()),
             jwt_expire_hours: parse_env("JWT_EXPIRE_HOURS", 8u64)?,
+            microchip_api_url: env::var("MICROCHIP_API_URL")
+                .unwrap_or_else(|_| "http://mth-sv-assykam/assyapi/api/MicrochipAccount".to_string()),
+            microchip_timeout_secs: parse_env("MICROCHIP_TIMEOUT_SECS", 15u64)?,
             view_name: env::var("VIEW_NAME").unwrap_or_else(|_| "vw_job_nokey".to_string()),
             machine_table: env::var("MACHINE_TABLE").unwrap_or_else(|_| "dbo.machine".to_string()),
             job_table: env::var("JOB_TABLE").unwrap_or_else(|_| "[MTHAI_ppm_db1].[dbo].[job_listx]".to_string()),

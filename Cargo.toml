@@ -32,6 +32,13 @@ tiberius = { version = "0.12", features = ["chrono", "tds73"] }
 bb8 = "0.9"
 bb8-tiberius = "0.16"
 
+# HTTP client — outbound calls (Microchip Account API login, plain http:// —
+# no TLS backend needed/wanted). default-features off avoids native-tls (needs
+# dlltool.exe) and rustls' ring backend (needs gcc) — neither toolchain is
+# present in this build environment, consistent with the "pure Rust, no gcc"
+# auth stack already used for JWT in this project.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
 # Config & Environment
 dotenvy = "0.15"
 

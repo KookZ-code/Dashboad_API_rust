@@ -19,11 +19,13 @@ pub struct ErrDetail { pub code: &'static str, pub message: &'static str }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub:          String,   // username
+    pub sub:          String,         // username (badge code)
     pub id:           i32,
     pub display_name: String,
     pub role:         String,
-    pub exp:          i64,      // unix timestamp
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub img:          Option<String>, // profile image URL from Microchip API
+    pub exp:          i64,            // unix timestamp
 }
 
 // ─── Pure-Rust HS256 JWT ──────────────────────────────────────────────────────

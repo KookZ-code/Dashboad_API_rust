@@ -88,6 +88,17 @@ pub async fn update_user(pool: &MssqlPool, id: i32, req: UpdateUserReq) -> Resul
     Ok(())
 }
 
+/// Refresh the cached display name from the latest Microchip API response.
+/// Best-effort — the login handler must not fail if this write errors.
+pub async fn touch_login(pool: &MssqlPool, badge_code: &str, fullname: &str) -> Result<(), AppError> {
+    exec(
+        pool,
+        "UPDATE [dbo].[dashboard_users] SET display_name=@p1 WHERE username=@p2",
+        &[fullname.to_string(), badge_code.to_string()],
+    ).await?;
+    Ok(())
+}
+
 pub async fn set_password(pool: &MssqlPool, id: i32, hash: &str) -> Result<(), AppError> {
     exec(
         pool,
