@@ -218,6 +218,35 @@
       }
     },
 
+    "/api/v1/overview/mtbf": {
+      "get": {
+        "tags": ["Overview"],
+        "summary": "MTBF (Mean Time Between Failures) รายเครื่อง + fleet aggregate",
+        "description": "คำนวณจาก M/C DOWN events ที่มีอยู่แล้ว — ไม่มี table แยกสำหรับ MTBF. Fleet MTBF = total uptime / total failures (ไม่ใช่ค่าเฉลี่ยของ MTBF รายเครื่อง)",
+        "operationId": "getOverviewMtbf",
+        "parameters": [
+          { "$ref": "#/components/parameters/start" },
+          { "$ref": "#/components/parameters/end" },
+          { "$ref": "#/components/parameters/areas" },
+          { "$ref": "#/components/parameters/shift" }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "example": {
+              "data": {
+                "fleet_mtbf_hours": 186.4,
+                "fleet_down_events": 42,
+                "machines": [{ "machine_id": "WB01", "mtbf_hours": 210.5, "down_events": 3 }]
+              },
+              "error": null
+            }}}
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
     "/api/v1/utilization/detail": {
       "get": {
         "tags": ["Utilization"],
@@ -328,6 +357,32 @@
         ],
         "responses": {
           "200": { "description": "OK", "content": { "application/json": { "example": { "data": { "events": [{ "event_time": "2026-05-01T08:30:00Z", "machine_id": "WB01", "area": "WB", "job_type": "M/C DOWN", "cause": "BOND FAIL", "wait_min": 15, "repair_min": 60 }], "total": 1 }, "error": null }}}},
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/api/v1/downtime/top-machines": {
+      "get": {
+        "tags": ["Downtime"],
+        "summary": "Top N เครื่องที่ downtime สูงสุด (เรียงตาม down_hours ล้วน ๆ)",
+        "description": "ต่างจาก /utilization/attention — ไม่มี composite score, ไม่ merge Oracle, เรียงตาม down_hours DESC ตรงไปตรงมา",
+        "operationId": "getDowntimeTopMachines",
+        "parameters": [
+          { "$ref": "#/components/parameters/start" },
+          { "$ref": "#/components/parameters/end" },
+          { "$ref": "#/components/parameters/areas" },
+          { "$ref": "#/components/parameters/shift" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 10, "minimum": 5, "maximum": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "example": {
+              "data": { "rows": [{ "machine_id": "WB428R", "area": "WB", "down_hours": 9.8, "event_count": 6, "avg_mttr_min": 98 }] },
+              "error": null
+            }}}
+          },
           "401": { "$ref": "#/components/responses/Unauthorized" }
         }
       }

@@ -47,10 +47,9 @@ pub fn create_app(sqlite: DbPool, mssql: MssqlPool, oracle: std::sync::Arc<crate
 
 fn admin_only_routes() -> Router<AppState> {
     Router::new()
-        // Users CRUD
+        // Badge → Role CRUD (badge login replaces password; this is role assignment only)
         .route("/users",              get(users::list_users).post(users::create_user))
         .route("/users/{id}",         put(users::update_user).delete(users::delete_user))
-        .route("/users/{id}/password",put(users::set_password))
         // Permissions
         .route("/permissions",        get(permissions::get_permissions))
         .route("/permissions/{role}", put(permissions::set_permissions))
@@ -66,14 +65,16 @@ fn authenticated_routes() -> Router<AppState> {
         // ─── Overview ─────────────────────────────────────────────────────────
         .route("/overview",          get(overview::get_overview))
         .route("/overview/open-jobs",get(overview::get_open_jobs))
+        .route("/overview/mtbf",     get(overview::get_mtbf))
         // ─── Utilization ──────────────────────────────────────────────────────
         .route("/utilization/detail",    get(utilization::get_detail))
         .route("/utilization/by-machine",get(utilization::get_by_machine))
         .route("/utilization/attention", get(utilization::get_attention))
         // ─── Downtime ─────────────────────────────────────────────────────────
-        .route("/downtime/detail",  get(downtime::get_detail))
-        .route("/downtime/machines",get(downtime::get_machines))
-        .route("/downtime/events",  get(downtime::get_events))
+        .route("/downtime/detail",      get(downtime::get_detail))
+        .route("/downtime/machines",    get(downtime::get_machines))
+        .route("/downtime/events",      get(downtime::get_events))
+        .route("/downtime/top-machines",get(downtime::get_top_machines))
         // ─── Inventory ────────────────────────────────────────────────────────
         .route("/inventory/machines",get(inventory::get_machines))
         .route("/inventory/downtime",get(inventory::get_downtime))
@@ -84,8 +85,9 @@ fn authenticated_routes() -> Router<AppState> {
         .route("/tech/supervisor-metrics", get(tech::get_supervisor_metrics))
         .route("/tech/list",               get(tech::get_list))
         // ─── WB ───────────────────────────────────────────────────────────────
-        .route("/wb/packages",get(wb::get_packages))
-        .route("/wb/report",  get(wb::get_report))
+        .route("/wb/packages",    get(wb::get_packages))
+        .route("/wb/report",      get(wb::get_report))
+        .route("/wb/report-7day", get(wb::get_report_7day))
         // ─── DA ───────────────────────────────────────────────────────────────
         .route("/da/packages",get(da::get_packages))
         .route("/da/report",  get(da::get_report))

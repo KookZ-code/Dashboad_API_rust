@@ -8,6 +8,11 @@ use crate::{errors::AppResult, handlers::AppState, models::ApiResponse, reposito
 pub struct OverviewQuery { pub areas: Option<String> }
 #[derive(Deserialize)]
 pub struct OpenJobsQuery { pub areas: Option<String>, pub job_type: Option<String> }
+#[derive(Deserialize)]
+pub struct MtbfQuery {
+    pub start: Option<String>, pub end: Option<String>,
+    pub areas: Option<String>, pub shift: Option<String>,
+}
 
 pub async fn get_overview(
     State(s): State<AppState>,
@@ -25,4 +30,15 @@ pub async fn get_open_jobs(
     let repo = OverviewRepo::new(&s.mssql, &s.config.machine_table, &s.oracle);
     let jobs = repo.open_jobs(q.areas.as_deref(), q.job_type.as_deref()).await?;
     Ok(Json(ApiResponse::success(serde_json::json!({ "jobs": jobs }))))
+}
+
+pub async fn get_mtbf(
+    State(s): State<AppState>,
+    Query(q): Query<MtbfQuery>,
+) -> AppResult<Json<ApiResponse<Value>>> {
+    let repo = OverviewRepo::new(&s.mssql, &s.config.machine_table, &s.oracle);
+    let data = repo.mtbf(
+        &s.config.view_name, q.start.as_deref(), q.end.as_deref(), q.areas.as_deref(), q.shift.as_deref(),
+    ).await?;
+    Ok(Json(ApiResponse::success(data)))
 }

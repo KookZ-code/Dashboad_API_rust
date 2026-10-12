@@ -17,6 +17,12 @@ pub struct DetailQuery {
 #[derive(Deserialize)]
 pub struct MachinesQuery { pub areas: Option<String> }
 #[derive(Deserialize)]
+pub struct TopMachinesQuery {
+    pub start: Option<String>, pub end: Option<String>,
+    pub areas: Option<String>, pub shift: Option<String>,
+    pub limit: Option<String>,
+}
+#[derive(Deserialize)]
 pub struct EventsQuery {
     pub job_types: Option<String>, pub start: Option<String>, pub end: Option<String>,
     pub areas: Option<String>, pub shift: Option<String>,
@@ -46,6 +52,17 @@ pub async fn get_machines(
     let repo = DowntimeRepo::new(&s.mssql, &s.config.view_name, &s.oracle);
     let machines = repo.machines_with_downtime(q.areas.as_deref()).await?;
     Ok(Json(ApiResponse::success(serde_json::json!({ "machines": machines }))))
+}
+
+pub async fn get_top_machines(
+    State(s): State<AppState>, Query(q): Query<TopMachinesQuery>,
+) -> AppResult<Json<ApiResponse<Value>>> {
+    let lim = q.limit.as_deref().and_then(|s| s.parse::<u32>().ok()).unwrap_or(10).clamp(5, 20);
+    let repo = DowntimeRepo::new(&s.mssql, &s.config.view_name, &s.oracle);
+    let rows = repo.top_machines(
+        q.start.as_deref(), q.end.as_deref(), q.areas.as_deref(), q.shift.as_deref(), lim,
+    ).await?;
+    Ok(Json(ApiResponse::success(serde_json::json!({ "rows": rows }))))
 }
 
 pub async fn get_events(

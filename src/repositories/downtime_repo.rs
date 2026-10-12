@@ -253,6 +253,34 @@ impl<'a> DowntimeRepo<'a> {
         Ok(result)
     }
 
+    /// Top N machines by M/C DOWN hours (strictly sorted by down_hours, MSSQL-only —
+    /// unlike utilization_repo::attention() this has no composite score and no Oracle merge).
+    pub async fn top_machines(
+        &self,
+        start: Option<&str>, end: Option<&str>,
+        areas: Option<&str>, shift: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<Value>, AppError> {
+        let wc = build_where(WhereOpts { start, end, areas, shift, machine_id: None, drill_day: None });
+        let sql = format!(
+            "SELECT TOP {limit} [{C_MID}] AS machine_id, [{C_AREA}] AS area, \
+             ROUND(CAST(SUM(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}])) AS FLOAT)/60.0,1) AS down_hours, \
+             COUNT(*) AS event_count, \
+             ROUND(CAST(AVG(DATEDIFF(MINUTE,[{C_TECH}],[{C_END}])) AS FLOAT),0) AS avg_mttr_min \
+             FROM {} {} AND [{C_JT}] = 'M/C DOWN' \
+             GROUP BY [{C_MID}],[{C_AREA}] ORDER BY down_hours DESC",
+            self.view, wc.sql
+        );
+        let rows = exec(self.pool, &sql, &wc.params).await?;
+        Ok(rows.iter().map(|r| json!({
+            "machine_id":   str_val(r, "machine_id"),
+            "area":         str_val(r, "area"),
+            "down_hours":   f64_val(r, "down_hours"),
+            "event_count":  i32_val(r, "event_count"),
+            "avg_mttr_min": f64_val(r, "avg_mttr_min"),
+        })).collect())
+    }
+
     pub async fn events(&self, opts: DowntimeEventOpts<'_>) -> Result<Vec<Value>, AppError> {
         let DowntimeEventOpts { job_types, start, end, areas, shift, machine, symptom, cause, tech, limit, drill_day } = opts;
         let lim = limit.clamp(50, 2000);
