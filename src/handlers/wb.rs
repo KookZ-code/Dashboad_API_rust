@@ -38,3 +38,16 @@ pub async fn get_report(
     let data = repo.report(date, shift, packages).await?;
     Ok(Json(ApiResponse::success(data)))
 }
+
+pub async fn get_report_7day(
+    State(s): State<AppState>, Query(q): Query<ReportQuery>,
+) -> AppResult<Json<ApiResponse<Value>>> {
+    let date = q.date.as_deref().unwrap_or("");
+    if date.len() != 10 || !date.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return Err(crate::errors::AppError::BadRequest("date (YYYY-MM-DD) required".into()));
+    }
+    let packages = q.packages.as_deref().unwrap_or("__ALL__");
+    let repo = WbRepo::new(&s.mssql, &s.config.view_name, &s.config.machine_table);
+    let data = repo.report_7day(date, packages).await?;
+    Ok(Json(ApiResponse::success(data)))
+}
