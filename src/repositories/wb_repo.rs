@@ -161,6 +161,8 @@ impl<'a> WbRepo<'a> {
                 "date": date,
                 "shift": shift,
                 "total_request_jobs": metrics.get("total_request_jobs").cloned().unwrap_or(json!(0)),
+                "request_down_jobs": metrics.get("request_down_jobs").cloned().unwrap_or(json!(0)),
+                "request_setup_jobs": metrics.get("request_setup_jobs").cloned().unwrap_or(json!(0)),
                 "total_closed_jobs": metrics.get("total_closed_jobs").cloned().unwrap_or(json!(0)),
                 "tech_count": metrics.get("tech_count").cloned().unwrap_or(json!(0)),
                 "avg_job_per_tech": metrics.get("avg_job_per_tech").cloned().unwrap_or(json!(0.0)),
@@ -334,7 +336,8 @@ pub fn build_shift_report(
                 down_min += repair;
                 if let Some(tech) = opt_str(r, "tech_name") {
                     if !tech.is_empty() {
-                        let job_id = format!("{:?}", datex);
+                        // Type-prefixed so a DOWN and a SETUP starting at the same datex count as two jobs
+                        let job_id = format!("DOWN:{:?}", datex);
                         let ts = tech_stats.entry(tech.clone()).or_default();
                         ts.down_times.push(repair);
                         ts.down_events += 1;
@@ -349,7 +352,7 @@ pub fn build_shift_report(
                 if SETUP_CONV.contains(&jt.as_str()) { setup_conv_min += repair; }
                 if let Some(tech) = opt_str(r, "tech_name") {
                     if !tech.is_empty() && SETUP_CONV.contains(&jt.as_str()) {
-                        let job_id = format!("{:?}", datex);
+                        let job_id = format!("SETUP:{:?}", datex);
                         let ts = tech_stats.entry(tech.clone()).or_default();
                         ts.setup_times.push(repair);
                         ts.setup_events += 1;
@@ -628,6 +631,9 @@ fn compute_shift_metrics_with_details(
         down_times: Vec<f64>,
         setup_times: Vec<f64>,
         wait_times: Vec<f64>,
+        // Open (not yet closed) jobs split by type, so the 7-day chart can show request per type
+        open_down_job_ids: HashSet<String>,
+        open_setup_job_ids: HashSet<String>,
     }
     let mut tech_stats: HashMap<String, TechStats> = Default::default();
     let mut wait_times_all: Vec<f64> = Vec::new();
@@ -661,7 +667,8 @@ fn compute_shift_metrics_with_details(
                 down_min += repair;
                 if let Some(tech) = opt_str(r, "tech_name") {
                     if !tech.is_empty() && tech.starts_with('B') {
-                        let job_id = format!("{:?}", datex);
+                        // Type-prefixed so a DOWN and a SETUP starting at the same datex count as two jobs
+                        let job_id = format!("DOWN:{:?}", datex);
                         let ts = tech_stats.entry(tech.clone()).or_default();
                         ts.down_times.push(repair);
                         ts.wait_times.push(wt);
@@ -676,7 +683,7 @@ fn compute_shift_metrics_with_details(
                 if SETUP_CONV.contains(&jt.as_str()) { setup_conv_min += repair; }
                 if let Some(tech) = opt_str(r, "tech_name") {
                     if !tech.is_empty() && SETUP_CONV.contains(&jt.as_str()) && tech.starts_with('B') {
-                        let job_id = format!("{:?}", datex);
+                        let job_id = format!("SETUP:{:?}", datex);
                         let ts = tech_stats.entry(tech.clone()).or_default();
                         ts.setup_times.push(repair);
                         ts.wait_times.push(wt);
@@ -696,7 +703,8 @@ fn compute_shift_metrics_with_details(
                     if !tech.is_empty() && tech.starts_with('B') {
                         let job_id = format!("{}:{}:{}", mid, str_val(r, "t_start"), str_val(r, "des_job"));
                         let ts = tech_stats.entry(tech.clone()).or_default();
-                        ts.open_job_ids.insert(job_id);
+                        ts.open_job_ids.insert(job_id.clone());
+                        ts.open_down_job_ids.insert(job_id);
                     }
                 }
             } else if LOST_TYPES.contains(&jt.as_str()) {
@@ -705,7 +713,8 @@ fn compute_shift_metrics_with_details(
                     if !tech.is_empty() && SETUP_CONV.contains(&jt.as_str()) && tech.starts_with('B') {
                         let job_id = format!("{}:{}:{}", mid, str_val(r, "t_start"), str_val(r, "des_job"));
                         let ts = tech_stats.entry(tech.clone()).or_default();
-                        ts.open_job_ids.insert(job_id);
+                        ts.open_job_ids.insert(job_id.clone());
+                        ts.open_setup_job_ids.insert(job_id);
                     }
                 }
             }
@@ -732,6 +741,9 @@ fn compute_shift_metrics_with_details(
     let total_request_jobs: i32 = total_closed_jobs + total_open_jobs;
     let total_down_jobs: i32 = tech_stats.values().map(|ts| ts.down_job_ids.len() as i32).sum();
     let total_setup_jobs: i32 = tech_stats.values().map(|ts| ts.setup_job_ids.len() as i32).sum();
+    // Request per type = closed of that type + open of that type (closed keys and open keys never overlap)
+    let request_down_jobs: i32 = tech_stats.values().map(|ts| (ts.down_job_ids.len() + ts.open_down_job_ids.len()) as i32).sum();
+    let request_setup_jobs: i32 = tech_stats.values().map(|ts| (ts.setup_job_ids.len() + ts.open_setup_job_ids.len()) as i32).sum();
     let tech_count = tech_stats.len() as i32;
 
     let avg_down_time = if !tech_stats.is_empty() {
@@ -768,6 +780,8 @@ fn compute_shift_metrics_with_details(
             "setup_conv_pct": ((total_setup_conv_pct / n) * 10.0).round() / 10.0,
             "idle_pct": ((total_idle_pct / n) * 10.0).round() / 10.0,
             "total_request_jobs": total_request_jobs,
+            "request_down_jobs": request_down_jobs,
+            "request_setup_jobs": request_setup_jobs,
             "total_closed_jobs": total_closed_jobs,
             "tech_count": tech_count,
             "avg_job_per_tech": if tech_count > 0 { ((total_closed_jobs as f64 / tech_count as f64) * 10.0).round() / 10.0 } else { 0.0 },
@@ -786,6 +800,8 @@ fn compute_shift_metrics_with_details(
             "setup_conv_pct": 0.0,
             "idle_pct": 0.0,
             "total_request_jobs": 0,
+            "request_down_jobs": 0,
+            "request_setup_jobs": 0,
             "total_closed_jobs": 0,
             "tech_count": 0,
             "avg_job_per_tech": 0.0,
