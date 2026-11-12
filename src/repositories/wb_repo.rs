@@ -112,6 +112,11 @@ impl<'a> WbRepo<'a> {
     }
 
     pub async fn report_7day(&self, end_date: &str, packages: &str) -> Result<Value, AppError> {
+        self.report_7day_for("WB", end_date, packages).await
+    }
+
+    /// 7-day, 14-shift trend for one operation area ('WB' or 'DA'). Shared so DA and WB stay identical.
+    pub async fn report_7day_for(&self, op: &str, end_date: &str, packages: &str) -> Result<Value, AppError> {
         // Generate 7 days backwards (14 shifts: Night, Day)
         let end = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
             .map_err(|_| AppError::BadRequest("Invalid date format".into()))?;
@@ -130,11 +135,11 @@ impl<'a> WbRepo<'a> {
             let (day_start, day_end, _) = Self::shift_window(&date_str, "Day");
 
             // Query Night shift
-            let night_report = self.query_shift_metrics(&night_start, &night_end, &date_str, packages).await?;
+            let night_report = self.query_shift_metrics(op, &night_start, &night_end, &date_str, packages).await?;
             shifts_data.push((date_str.clone(), "Night", night_report));
 
             // Query Day shift
-            let day_report = self.query_shift_metrics(&day_start, &day_end, &date_str, packages).await?;
+            let day_report = self.query_shift_metrics(op, &day_start, &day_end, &date_str, packages).await?;
             shifts_data.push((date_str, "Day", day_report));
         }
 
@@ -189,25 +194,25 @@ impl<'a> WbRepo<'a> {
         }))
     }
 
-    async fn query_shift_metrics(&self, start: &str, end: &str, date: &str, packages: &str) -> Result<Value, AppError> {
+    pub async fn query_shift_metrics(&self, op: &str, start: &str, end: &str, date: &str, packages: &str) -> Result<Value, AppError> {
         let params_ev = vec![start.to_string(), end.to_string(), date.to_string()];
         let params_open = vec![start.to_string(), end.to_string()];
 
         let sql_ev = format!(
             "WITH key_mc AS ( \
                SELECT RTRIM(LTRIM([code_machine])) AS code_machine FROM {} \
-               WHERE [id_operation] = 'WB' AND [flag_key] = 1 AND ISNULL([flag_delete],0) != 1 \
+               WHERE [id_operation] = '{op}' AND [flag_key] = 1 AND ISNULL([flag_delete],0) != 1 \
              ), shift_ev AS ( \
                SELECT RTRIM(LTRIM([code_machine])) AS code_machine, [job_type], [datex], [date_ack], \
                       [date_close], [des_job], ISNULL([Waiting_time],0) AS wait_min, [Package Type] AS package_type, \
                       NULLIF(RTRIM(LTRIM(ISNULL([by_perform],[by_ack]))),'') AS tech_name \
-               FROM {} WHERE [id_operation]='WB' AND [datex]>=@p1 AND [datex]<@p2 \
+               FROM {} WHERE [id_operation]='{op}' AND [datex]>=@p1 AND [datex]<@p2 \
                  AND [date_close] IS NOT NULL AND [date_close]>[datex] \
                  AND UPPER(ISNULL([cause],'')) NOT IN ('CANCEL', 'N/A') \
              ), pkg_scan AS ( \
                SELECT RTRIM(LTRIM([code_machine])) AS code_machine, [Package Type] AS package_type, \
                       ROW_NUMBER() OVER (PARTITION BY RTRIM(LTRIM([code_machine])) ORDER BY [datex] DESC) AS rn \
-               FROM {} WHERE [id_operation]='WB' AND [Package Type] IS NOT NULL AND [Package Type]!='' \
+               FROM {} WHERE [id_operation]='{op}' AND [Package Type] IS NOT NULL AND [Package Type]!='' \
                  AND [datex]>=DATEADD(DAY,-7,CAST(@p3 AS DATE)) AND [datex]<DATEADD(DAY,1,CAST(@p3 AS DATE)) \
              ), last_pkg AS (SELECT code_machine, package_type FROM pkg_scan WHERE rn=1) \
              SELECT k.code_machine, se.job_type, se.datex, se.date_ack, se.date_close, se.des_job, \
@@ -215,16 +220,16 @@ impl<'a> WbRepo<'a> {
              FROM key_mc k LEFT JOIN shift_ev se ON k.code_machine=se.code_machine \
              LEFT JOIN last_pkg lp ON k.code_machine=lp.code_machine ORDER BY k.code_machine, se.datex",
             self.machine_table, self.view, self.view
-        );
+        ).replace("{op}", op);
         let sql_open = "SELECT RTRIM(LTRIM(code_machine)) AS code_machine, job_type, des_job, \
             FORMAT(datex,'HH:mm') AS t_start, \
             CASE WHEN date_close IS NOT NULL THEN DATEDIFF(MINUTE,datex,date_close) \
                  ELSE DATEDIFF(MINUTE,datex,GETDATE()) END AS dur_min, \
             ISNULL(by_perform, by_ack) AS tech_name \
-            FROM dbo.job_listx WHERE id_operation='WB' \
+            FROM dbo.job_listx WHERE id_operation='{op}' \
             AND code_machine!='' AND LEN(code_machine)>3 \
             AND datex>=@p1 AND datex<@p2 \
-            AND (date_close IS NULL OR UPPER(ISNULL([cause],'')) IN ('CANCEL', 'N/A'))".to_string();
+            AND (date_close IS NULL OR UPPER(ISNULL([cause],'')) IN ('CANCEL', 'N/A'))".replace("{op}", op);
 
         let (ev_rows, open_rows) = tokio::try_join!(
             exec(self.pool, &sql_ev, &params_ev),

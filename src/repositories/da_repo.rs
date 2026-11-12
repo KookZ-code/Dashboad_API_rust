@@ -80,4 +80,12 @@ impl<'a> DaRepo<'a> {
 
         Ok(build_shift_report(&ev_rows, &open_rows, packages, shift, &time_range))
     }
+
+    /// 7-day, 14-shift trend for DA (Night + Day per day). Same shape as WB's report-7day, so the page
+    /// and the PPTX export can reuse one code path. Uses the DA operation code and job_listx.
+    pub async fn report_7day(&self, end_date: &str, packages: &str) -> Result<Value, AppError> {
+        super::wb_repo::WbRepo::new(self.pool, self.view.clone(), self.machine_table.clone())
+            .report_7day_for("DA", end_date, packages)
+            .await
+    }
 }

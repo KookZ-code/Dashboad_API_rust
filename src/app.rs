@@ -91,6 +91,7 @@ fn authenticated_routes() -> Router<AppState> {
         // ─── DA ───────────────────────────────────────────────────────────────
         .route("/da/packages",get(da::get_packages))
         .route("/da/report",  get(da::get_report))
+        .route("/da/report-7day", get(da::get_report_7day))
         // ─── WB-UPH (SQLite central.db; hourly bond-unit monitor) ──────────────
         .route("/wb-uph/summary", get(wb_uph::get_summary))
         .route("/wb-uph/hourly",  get(wb_uph::get_hourly))
